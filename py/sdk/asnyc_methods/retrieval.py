@@ -178,6 +178,10 @@ class RetrievalSDK:
             task_prompt (Optional[str]): Optional custom prompt to override default.
             include_title_if_available (Optional[bool]): Include document titles in responses when available.
             include_web_search (Optional[bool]): Include web search results provided to the LLM.
+            cache_enabled (Optional[bool]): Enable semantic cache for this query (default: True).
+            cache_similarity_threshold (Optional[float]): Minimum similarity score (0-1) for cache hits (default: 0.85).
+            cache_ttl_seconds (Optional[int]): Cache entry time-to-live in seconds. 0 = indefinite (default: 0).
+            bypass_cache (Optional[bool]): Skip cache lookup and force fresh RAG generation (default: False).
 
         Returns:
             Either a WrappedRAGResponse or an AsyncGenerator for streaming.

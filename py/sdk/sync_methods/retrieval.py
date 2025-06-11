@@ -204,6 +204,11 @@ def rag_arg_parser(
     task_prompt: Optional[str] = None,
     include_title_if_available: Optional[bool] = False,
     include_web_search: Optional[bool] = False,
+    # Cache configuration
+    cache_enabled: Optional[bool] = True,
+    cache_similarity_threshold: Optional[float] = 0.85,
+    cache_ttl_seconds: Optional[int] = 0,
+    bypass_cache: Optional[bool] = False,
 ) -> dict:
     if rag_generation_config and not isinstance(rag_generation_config, dict):
         rag_generation_config = rag_generation_config.model_dump()
@@ -217,6 +222,11 @@ def rag_arg_parser(
         "task_prompt": task_prompt,
         "include_title_if_available": include_title_if_available,
         "include_web_search": include_web_search,
+        # Cache configuration
+        "cache_enabled": cache_enabled,
+        "cache_similarity_threshold": cache_similarity_threshold,
+        "cache_ttl_seconds": cache_ttl_seconds,
+        "bypass_cache": bypass_cache,
     }
     if search_mode:
         data["search_mode"] = search_mode
@@ -371,6 +381,11 @@ class RetrievalSDK:
         task_prompt: Optional[str] = None,
         include_title_if_available: Optional[bool] = False,
         include_web_search: Optional[bool] = False,
+        # Cache configuration
+        cache_enabled: Optional[bool] = True,
+        cache_similarity_threshold: Optional[float] = 0.85,
+        cache_ttl_seconds: Optional[int] = 0,
+        bypass_cache: Optional[bool] = False,
     ) -> (
         WrappedRAGResponse
         | Generator[
@@ -408,6 +423,10 @@ class RetrievalSDK:
             task_prompt=task_prompt,
             include_title_if_available=include_title_if_available,
             include_web_search=include_web_search,
+            cache_enabled=cache_enabled,
+            cache_similarity_threshold=cache_similarity_threshold,
+            cache_ttl_seconds=cache_ttl_seconds,
+            bypass_cache=bypass_cache,
         )
         rag_generation_config = data.get("rag_generation_config")
         if rag_generation_config and rag_generation_config.get(  # type: ignore
