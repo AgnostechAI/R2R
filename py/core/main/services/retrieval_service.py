@@ -1063,11 +1063,11 @@ class RetrievalService(Service):
     async def _get_cache_collection_id(self, collection_id: UUID) -> UUID:
         """Get the cache collection ID for a given collection.
         
-        Looks up the cache collection (collection with "_cache" suffix) 
-        associated with the given collection ID.
+        If the collection is already a cache collection (ends with _cache), return it.
+        Otherwise, look for the associated cache collection.
         """
         try:
-            # Get collection info to find the cache collection
+            # Get collection info
             collections_overview = await self.providers.database.collections_handler.get_collections_overview(
                 offset=0,
                 limit=100,
@@ -1080,7 +1080,11 @@ class RetrievalService(Service):
             collection = collections_overview["results"][0]
             collection_name = collection.name
             
-            # Look for the cache collection (name + "_cache")
+            # If this collection already ends with "_cache", it IS the cache collection
+            if collection_name.endswith("_cache"):
+                return collection_id
+            
+            # Otherwise, look for the cache collection (name + "_cache")
             cache_name = f"{collection_name}_cache"
             
             # Search for cache collection by name
