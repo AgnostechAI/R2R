@@ -14,6 +14,8 @@ from core.base.api.models import (
     GenericBooleanResponse,
     WrappedBooleanResponse,
     WrappedCollectionResponse,
+    WrappedCollectionCreationResponse,
+    CollectionCreationResponse,
     WrappedCollectionsResponse,
     WrappedDocumentsResponse,
     WrappedGenericMessageResponse,
@@ -149,7 +151,7 @@ class CollectionsRouter(BaseRouterV3):
                 None, description="An optional description of the collection"
             ),
             auth_user=Depends(self.providers.auth.auth_wrapper()),
-        ) -> WrappedCollectionResponse:
+        ) -> WrappedCollectionCreationResponse:
             """Create a new collection and automatically add the creating user
             to it.
 
@@ -194,7 +196,12 @@ class CollectionsRouter(BaseRouterV3):
                 auth_user.id, cache_collection.id
             )
             
-            return collection  # type: ignore
+            return WrappedCollectionCreationResponse(
+                results=CollectionCreationResponse(
+                    main_collection=collection,
+                    cache_collection=cache_collection,
+                )
+            )  # type: ignore
 
         @self.router.post(
             "/collections/export",

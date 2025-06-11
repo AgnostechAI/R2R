@@ -140,6 +140,13 @@ WrappedChunksResponse = PaginatedR2RResult[list[ChunkResponse]]
 WrappedCollectionResponse = R2RResults[CollectionResponse]
 WrappedCollectionsResponse = PaginatedR2RResult[list[CollectionResponse]]
 
+# Collection Creation Response (includes both main and cache collections)
+class CollectionCreationResponse(BaseModel):
+    main_collection: CollectionResponse
+    cache_collection: CollectionResponse
+
+WrappedCollectionCreationResponse = R2RResults[CollectionCreationResponse]
+
 # Conversation Responses
 WrappedConversationMessagesResponse = R2RResults[list[MessageResponse]]
 WrappedConversationResponse = R2RResults[ConversationResponse]

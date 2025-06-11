@@ -4,6 +4,7 @@ from uuid import UUID
 from shared.api.models import (
     WrappedBooleanResponse,
     WrappedCollectionResponse,
+    WrappedCollectionCreationResponse,
     WrappedCollectionsResponse,
     WrappedDocumentsResponse,
     WrappedGenericMessageResponse,
@@ -19,7 +20,7 @@ class CollectionsSDK:
         self,
         name: str,
         description: Optional[str] = None,
-    ) -> WrappedCollectionResponse:
+    ) -> WrappedCollectionCreationResponse:
         """Create a new collection.
 
         Args:
@@ -27,7 +28,7 @@ class CollectionsSDK:
             description (Optional[str]): Description of the collection
 
         Returns:
-            WrappedCollectionResponse
+            WrappedCollectionCreationResponse: Contains both main collection and cache collection
         """
         data: dict[str, Any] = {"name": name, "description": description}
         response_dict = self.client._make_request(
@@ -37,7 +38,7 @@ class CollectionsSDK:
             version="v3",
         )
 
-        return WrappedCollectionResponse(**response_dict)
+        return WrappedCollectionCreationResponse(**response_dict)
 
     def list(
         self,

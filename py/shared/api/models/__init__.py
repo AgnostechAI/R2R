@@ -32,6 +32,7 @@ from shared.api.models.ingestion.responses import (
 from shared.api.models.management.responses import (
     ChunkResponse,
     CollectionResponse,
+    CollectionCreationResponse,
     ConversationResponse,
     MessageResponse,
     PromptResponse,
@@ -42,6 +43,7 @@ from shared.api.models.management.responses import (
     WrappedChunkResponse,
     WrappedChunksResponse,
     WrappedCollectionResponse,
+    WrappedCollectionCreationResponse,
     WrappedCollectionsResponse,
     WrappedConversationMessagesResponse,
     WrappedConversationResponse,
@@ -152,6 +154,7 @@ __all__ = [
     "WrappedDocumentsResponse",
     # Collection Responses
     "WrappedCollectionResponse",
+    "WrappedCollectionCreationResponse",
     "WrappedCollectionsResponse",
     # Prompt Responses
     "WrappedPromptResponse",
