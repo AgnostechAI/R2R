@@ -153,11 +153,15 @@ class CollectionsRouter(BaseRouterV3):
             auth_user=Depends(self.providers.auth.auth_wrapper()),
         ) -> WrappedCollectionCreationResponse:
             """Create a new collection and automatically add the creating user
-            to it.
+            to it. Also creates an associated cache collection.
 
             This endpoint allows authenticated users to create a new collection
             with a specified name and optional description. The user creating
-            the collection is automatically added as a member.
+            the collection is automatically added as a member. A cache collection
+            with the name "{collection_name}_cache" is also automatically created
+            for semantic caching purposes.
+            
+            Returns both the main collection and the cache collection in the response.
             """
             user_collections_count = (
                 await self.services.management.collections_overview(
@@ -196,12 +200,10 @@ class CollectionsRouter(BaseRouterV3):
                 auth_user.id, cache_collection.id
             )
             
-            return WrappedCollectionCreationResponse(
-                results=CollectionCreationResponse(
-                    main_collection=collection,
-                    cache_collection=cache_collection,
-                )
-            )  # type: ignore
+            return CollectionCreationResponse(
+                main_collection=collection,
+                cache_collection=cache_collection,
+            )
 
         @self.router.post(
             "/collections/export",
