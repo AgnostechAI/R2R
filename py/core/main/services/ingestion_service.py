@@ -826,6 +826,521 @@ class IngestionService:
         )
         return len(new_vector_entries)
 
+    async def store_cache_entry(
+        self,
+        query: str,
+        response: dict,
+        collection_id: UUID,
+        owner_id: UUID,
+        cache_settings: Optional[dict] = None,
+    ) -> str:
+        """Store a RAG query-response pair in the semantic cache.
+        
+        Args:
+            query: The original query text
+            response: The RAG response containing generated_answer, search_results, etc.
+            collection_id: ID of the original collection
+            owner_id: ID of the user who made the query
+            cache_settings: Optional cache configuration settings
+            
+        Returns:
+            str: Success message with cache entry ID
+        """
+        from core.base import VectorEntry, Vector, VectorType, generate_id
+        import json
+        from datetime import datetime
+        
+        try:
+            # Get cache collection ID (original collection ID + "_cache")
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Generate embedding for the query
+            query_embedding = await self.providers.embedding.async_get_embedding(query)
+            
+            # Create cache entry ID
+            cache_entry_id = generate_id(f"cache_{query}_{collection_id}")
+            
+            # Create cache document ID  
+            cache_document_id = generate_id(f"cache_doc_{query}_{collection_id}")
+            
+            # Extract cache settings
+            settings = cache_settings or {}
+            ttl_seconds = settings.get("ttl_seconds", 0)  # 0 = indefinite storage by default
+            
+            # Create cache metadata
+            cache_metadata = {
+                "type": "semantic_cache_entry",
+                "original_query": query,
+                "generated_answer": response.get("generated_answer", ""),
+                "search_results": json.dumps(response.get("search_results", {})),
+                "citations": json.dumps(response.get("citations", [])),
+                "cached_at": datetime.now().isoformat(),
+                "cache_ttl": ttl_seconds,
+                "collection_id": str(collection_id),
+                "hit_count": 0,
+                "model_used": response.get("metadata", {}).get("model", "unknown"),
+                "response_tokens": len(response.get("generated_answer", "").split()),
+            }
+            
+            # Create vector entry for the cache
+            cache_vector_entry = VectorEntry(
+                id=cache_entry_id,
+                document_id=cache_document_id,
+                owner_id=owner_id,
+                collection_ids=[cache_collection_id],
+                vector=Vector(
+                    data=query_embedding,
+                    type=VectorType.FIXED,
+                    length=len(query_embedding)
+                ),
+                text=query,  # Store the query as the searchable text
+                metadata=cache_metadata,
+            )
+            
+            # Store the cache entry
+            await self.providers.database.chunks_handler.upsert_entries([cache_vector_entry])
+            
+            logger.info(f"Stored cache entry {cache_entry_id} for collection {collection_id}")
+            return f"Successfully cached entry {cache_entry_id}"
+            
+        except Exception as e:
+            logger.error(f"Error storing cache entry: {e}")
+            return f"Error storing cache entry: {e}"
+
+    async def _get_cache_collection_id(self, collection_id: UUID) -> UUID:
+        """Get the cache collection ID for a given collection.
+        
+        Looks up the cache collection (collection with "_cache" suffix) 
+        associated with the given collection ID.
+        """
+        try:
+            # Get collection info to find the cache collection
+            collections_overview = await self.providers.database.collections_handler.get_collections_overview(
+                offset=0,
+                limit=100,
+                filter_collection_ids=[collection_id]
+            )
+            
+            if not collections_overview["results"]:
+                raise ValueError(f"Collection {collection_id} not found")
+                
+            collection = collections_overview["results"][0]
+            collection_name = collection.name
+            
+            # Look for the cache collection (name + "_cache")
+            cache_name = f"{collection_name}_cache"
+            
+            # Search for cache collection by name
+            all_collections = await self.providers.database.collections_handler.get_collections_overview(
+                offset=0,
+                limit=1000,  # Get all collections to search by name
+                filter_user_ids=[collection.owner_id]
+            )
+            
+            for coll in all_collections["results"]:
+                if coll.name == cache_name:
+                    return coll.id
+                    
+            raise ValueError(f"Cache collection '{cache_name}' not found for collection '{collection_name}'")
+            
+        except Exception as e:
+            logger.error(f"Error getting cache collection ID: {e}")
+            raise
+
+    async def search_cache_entries(
+        self,
+        query: str,
+        collection_id: UUID,
+        similarity_threshold: float = 0.85,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Search for similar cached entries for a given query.
+        
+        Args:
+            query: The query to search for
+            collection_id: ID of the original collection
+            similarity_threshold: Minimum similarity score for cache hits
+            limit: Maximum number of results to return
+            
+        Returns:
+            list[dict]: List of matching cache entries with similarity scores
+        """
+        from datetime import datetime
+        import json
+        
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Generate embedding for the query
+            query_embedding = await self.providers.embedding.async_get_embedding(query)
+            
+            # Search cache collection for similar queries
+            from core.base import SearchSettings
+            search_settings = SearchSettings(
+                use_semantic_search=True,
+                limit=limit,
+                include_scores=True,
+                include_metadatas=True,
+                filters={"collection_ids": {"$overlap": [str(cache_collection_id)]}}
+            )
+            
+            # Perform semantic search on cache collection
+            results = await self.providers.database.chunks_handler.semantic_search(
+                query_vector=query_embedding,
+                search_settings=search_settings
+            )
+            
+            # Filter by similarity threshold and check for expired entries
+            cache_hits = []
+            for result in results:
+                if result.score and result.score >= similarity_threshold:
+                    # Check if entry is expired (only if TTL > 0)
+                    cached_at_str = result.metadata.get("cached_at")
+                    cache_ttl = result.metadata.get("cache_ttl", 0)
+                    
+                    if cached_at_str and cache_ttl > 0:  # Only check expiration if TTL is set
+                        cached_at = datetime.fromisoformat(cached_at_str)
+                        elapsed = (datetime.now() - cached_at).total_seconds()
+                        
+                        if elapsed > cache_ttl:
+                            logger.info(f"Cache entry {result.id} expired, skipping")
+                            continue
+                    
+                    cache_hits.append({
+                        "id": result.id,
+                        "original_query": result.text,
+                        "generated_answer": result.metadata.get("generated_answer", ""),
+                        "search_results": json.loads(result.metadata.get("search_results", "{}")),
+                        "citations": json.loads(result.metadata.get("citations", "[]")),
+                        "similarity_score": result.score,
+                        "hit_count": result.metadata.get("hit_count", 0),
+                        "cached_at": result.metadata.get("cached_at"),
+                        "metadata": result.metadata
+                    })
+            
+            return cache_hits
+            
+        except Exception as e:
+            logger.error(f"Error searching cache entries: {e}")
+            return []
+
+    async def increment_cache_hit_count(self, cache_entry_id: UUID) -> None:
+        """Increment the hit count for a cache entry."""
+        import json
+        
+        try:
+            # Get the current cache entry
+            cache_entry = await self.providers.database.chunks_handler.get_chunk(cache_entry_id)
+            if not cache_entry:
+                logger.warning(f"Cache entry {cache_entry_id} not found")
+                return
+                
+            # Update hit count
+            metadata = json.loads(cache_entry["metadata"]) if isinstance(cache_entry["metadata"], str) else cache_entry["metadata"]
+            metadata["hit_count"] = metadata.get("hit_count", 0) + 1
+            metadata["last_accessed"] = datetime.now().isoformat()
+            
+            # Create updated vector entry
+            from core.base import VectorEntry, Vector, VectorType
+            updated_entry = VectorEntry(
+                id=cache_entry_id,
+                document_id=UUID(cache_entry["document_id"]),
+                owner_id=UUID(cache_entry["owner_id"]),
+                collection_ids=cache_entry["collection_ids"],
+                vector=Vector(
+                    data=json.loads(cache_entry["vec"]) if isinstance(cache_entry["vec"], str) else cache_entry["vec"],
+                    type=VectorType.FIXED
+                ),
+                text=cache_entry["text"],
+                metadata=metadata,
+            )
+            
+            # Update the entry
+            await self.providers.database.chunks_handler.upsert_entries([updated_entry])
+            
+        except Exception as e:
+            logger.error(f"Error incrementing cache hit count: {e}")
+
+    async def get_cache_analytics(self, collection_id: UUID) -> dict:
+        """Get analytics and metrics for cache performance.
+        
+        Args:
+            collection_id: ID of the original collection
+            
+        Returns:
+            dict: Cache analytics including hit rates, entry counts, etc.
+        """
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Get all cache entries for this collection
+            cache_chunks = await self.providers.database.chunks_handler.list_chunks(
+                offset=0,
+                limit=10000,  # Large limit to get all entries
+                filters={
+                    "collection_ids": {"$overlap": [str(cache_collection_id)]},
+                    "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                }
+            )
+            
+            if not cache_chunks["results"]:
+                return {
+                    "collection_id": str(collection_id),
+                    "cache_collection_id": str(cache_collection_id),
+                    "total_entries": 0,
+                    "total_hits": 0,
+                    "average_hits_per_entry": 0,
+                    "most_popular_queries": [],
+                    "cache_size_mb": 0,
+                    "oldest_entry": None,
+                    "newest_entry": None
+                }
+            
+            total_entries = len(cache_chunks["results"])
+            total_hits = 0
+            entry_details = []
+            total_size_bytes = 0
+            
+            for chunk in cache_chunks["results"]:
+                metadata = chunk.get("metadata", {})
+                hit_count = metadata.get("hit_count", 0)
+                total_hits += hit_count
+                
+                entry_details.append({
+                    "query": chunk.get("text", ""),
+                    "hit_count": hit_count,
+                    "cached_at": metadata.get("cached_at"),
+                    "last_accessed": metadata.get("last_accessed"),
+                    "ttl": metadata.get("cache_ttl", 0)
+                })
+                
+                # Estimate size (text + metadata)
+                text_size = len(chunk.get("text", "").encode("utf-8"))
+                metadata_size = len(str(metadata).encode("utf-8"))
+                total_size_bytes += text_size + metadata_size
+            
+            # Sort by hit count for most popular queries
+            entry_details.sort(key=lambda x: x["hit_count"], reverse=True)
+            most_popular = entry_details[:10]  # Top 10
+            
+            # Find oldest and newest entries
+            entries_with_dates = [e for e in entry_details if e["cached_at"]]
+            oldest_entry = min(entries_with_dates, key=lambda x: x["cached_at"])["cached_at"] if entries_with_dates else None
+            newest_entry = max(entries_with_dates, key=lambda x: x["cached_at"])["cached_at"] if entries_with_dates else None
+            
+            return {
+                "collection_id": str(collection_id),
+                "cache_collection_id": str(cache_collection_id),
+                "total_entries": total_entries,
+                "total_hits": total_hits,
+                "average_hits_per_entry": round(total_hits / total_entries, 2) if total_entries > 0 else 0,
+                "most_popular_queries": [
+                    {"query": q["query"][:100], "hit_count": q["hit_count"]} 
+                    for q in most_popular[:5]  # Top 5 for brevity
+                ],
+                "cache_size_mb": round(total_size_bytes / (1024 * 1024), 2),
+                "oldest_entry": oldest_entry,
+                "newest_entry": newest_entry,
+                "entries_by_hit_count": {
+                    "0_hits": len([e for e in entry_details if e["hit_count"] == 0]),
+                    "1-5_hits": len([e for e in entry_details if 1 <= e["hit_count"] <= 5]),
+                    "6-20_hits": len([e for e in entry_details if 6 <= e["hit_count"] <= 20]),
+                    "20+_hits": len([e for e in entry_details if e["hit_count"] > 20])
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting cache analytics: {e}")
+            return {
+                "collection_id": str(collection_id),
+                "error": str(e),
+                "total_entries": 0,
+                "total_hits": 0
+            }
+
+    async def invalidate_cache_entries(
+        self,
+        collection_id: UUID,
+        query_patterns: Optional[list[str]] = None,
+        older_than_hours: Optional[int] = None,
+        hit_count_threshold: Optional[int] = None,
+        delete_all: bool = False
+    ) -> dict:
+        """Invalidate (delete) cache entries based on various criteria.
+        
+        Args:
+            collection_id: ID of the original collection
+            query_patterns: List of query patterns to match for deletion
+            older_than_hours: Delete entries older than X hours
+            hit_count_threshold: Delete entries with hit count below threshold
+            delete_all: Delete all cache entries for this collection
+            
+        Returns:
+            dict: Summary of deletion operation
+        """
+        from datetime import datetime, timedelta
+        import re
+        
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Get all cache entries for this collection
+            cache_chunks = await self.providers.database.chunks_handler.list_chunks(
+                offset=0,
+                limit=10000,
+                filters={
+                    "collection_ids": {"$overlap": [str(cache_collection_id)]},
+                    "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                }
+            )
+            
+            if not cache_chunks["results"]:
+                return {
+                    "collection_id": str(collection_id),
+                    "deleted_count": 0,
+                    "message": "No cache entries found"
+                }
+            
+            entries_to_delete = []
+            total_entries = len(cache_chunks["results"])
+            
+            for chunk in cache_chunks["results"]:
+                should_delete = delete_all
+                
+                if not should_delete and query_patterns:
+                    query_text = chunk.get("text", "").lower()
+                    for pattern in query_patterns:
+                        if re.search(pattern.lower(), query_text):
+                            should_delete = True
+                            break
+                
+                if not should_delete and older_than_hours:
+                    cached_at_str = chunk.get("metadata", {}).get("cached_at")
+                    if cached_at_str:
+                        cached_at = datetime.fromisoformat(cached_at_str)
+                        cutoff_time = datetime.now() - timedelta(hours=older_than_hours)
+                        if cached_at < cutoff_time:
+                            should_delete = True
+                
+                if not should_delete and hit_count_threshold is not None:
+                    hit_count = chunk.get("metadata", {}).get("hit_count", 0)
+                    if hit_count < hit_count_threshold:
+                        should_delete = True
+                
+                if should_delete:
+                    entries_to_delete.append(chunk["id"])
+            
+            # Delete the selected entries
+            if entries_to_delete:
+                for entry_id in entries_to_delete:
+                    await self.providers.database.chunks_handler.delete(
+                        filters={"id": {"$eq": entry_id}}
+                    )
+            
+            return {
+                "collection_id": str(collection_id),
+                "cache_collection_id": str(cache_collection_id),
+                "total_entries": total_entries,
+                "deleted_count": len(entries_to_delete),
+                "remaining_count": total_entries - len(entries_to_delete),
+                "deletion_criteria": {
+                    "query_patterns": query_patterns,
+                    "older_than_hours": older_than_hours,
+                    "hit_count_threshold": hit_count_threshold,
+                    "delete_all": delete_all
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error invalidating cache entries: {e}")
+            return {
+                "collection_id": str(collection_id),
+                "error": str(e),
+                "deleted_count": 0
+            }
+
+    async def cleanup_expired_cache_entries(self, collection_id: Optional[UUID] = None) -> dict:
+        """Clean up expired cache entries based on TTL.
+        
+        Args:
+            collection_id: Optional specific collection to clean, or None for all collections
+            
+        Returns:
+            dict: Summary of cleanup operation
+        """
+        from datetime import datetime
+        
+        try:
+            deleted_count = 0
+            processed_collections = []
+            
+            if collection_id:
+                # Clean specific collection
+                cache_collection_id = await self._get_cache_collection_id(collection_id)
+                collection_ids_to_process = [cache_collection_id]
+                processed_collections.append(str(collection_id))
+            else:
+                # Get all collections and find their cache collections
+                collections_overview = await self.providers.database.collections_handler.get_collections_overview(
+                    offset=0,
+                    limit=1000
+                )
+                
+                collection_ids_to_process = []
+                for collection in collections_overview["results"]:
+                    if collection.name.endswith("_cache"):
+                        collection_ids_to_process.append(collection.id)
+                        # Extract original collection name
+                        original_name = collection.name[:-6]  # Remove "_cache" suffix
+                        processed_collections.append(original_name)
+            
+            # Process each cache collection
+            for cache_coll_id in collection_ids_to_process:
+                cache_chunks = await self.providers.database.chunks_handler.list_chunks(
+                    offset=0,
+                    limit=10000,
+                    filters={
+                        "collection_ids": {"$overlap": [str(cache_coll_id)]},
+                        "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                    }
+                )
+                
+                for chunk in cache_chunks["results"]:
+                    metadata = chunk.get("metadata", {})
+                    cache_ttl = metadata.get("cache_ttl", 0)
+                    cached_at_str = metadata.get("cached_at")
+                    
+                    # Skip entries with indefinite storage (TTL = 0)
+                    if cache_ttl == 0 or not cached_at_str:
+                        continue
+                    
+                    # Check if entry has expired
+                    cached_at = datetime.fromisoformat(cached_at_str)
+                    elapsed = (datetime.now() - cached_at).total_seconds()
+                    
+                    if elapsed > cache_ttl:
+                        # Delete expired entry
+                        await self.providers.database.chunks_handler.delete(
+                            filters={"id": {"$eq": chunk["id"]}}
+                        )
+                        deleted_count += 1
+            
+            return {
+                "deleted_expired_entries": deleted_count,
+                "processed_collections": processed_collections,
+                "cleanup_timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up expired cache entries: {e}")
+            return {
+                "error": str(e),
+                "deleted_expired_entries": 0
+            }
+
     async def list_chunks(
         self,
         offset: int,

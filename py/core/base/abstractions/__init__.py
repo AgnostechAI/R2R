@@ -1,4 +1,10 @@
 from shared.abstractions.base import AsyncSyncMeta, R2RSerializable, syncable
+from shared.abstractions.cache import (
+    CacheEntry,
+    CacheMetrics,
+    CacheSearchResult,
+    CacheSettings,
+)
 from shared.abstractions.document import (
     ChunkEnrichmentSettings,
     Document,
@@ -78,6 +84,11 @@ __all__ = [
     "R2RSerializable",
     "AsyncSyncMeta",
     "syncable",
+    # Cache abstractions
+    "CacheEntry",
+    "CacheMetrics", 
+    "CacheSearchResult",
+    "CacheSettings",
     # Completion abstractions
     "MessageType",
     # Document abstractions

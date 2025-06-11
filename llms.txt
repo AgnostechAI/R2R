@@ -43,7 +43,183 @@
      - [Example Configuration](#example-configuration-7)
    - [Prompts Configuration](#prompts-configuration)
      - [Example Configuration](#example-configuration-8)
-5. [Data Ingestion](#data-ingestion)
+5. [Collections System](#collections-system)
+
+## Collections System
+
+The R2R Collections system provides a comprehensive organizational layer for documents, users, and knowledge graphs. Collections serve as containers that group related documents and manage access control.
+
+### Collection Creation Architecture
+
+The collection creation process involves several architectural layers:
+
+#### API Layer (`py/core/main/api/v3/collections_router.py`)
+- **Endpoint**: `POST /collections`
+- **Authorization**: Requires authenticated user
+- **Limits Check**: Validates user hasn't exceeded max collections limit
+- **Auto-membership**: Automatically adds creating user to the collection
+
+#### Service Layer (`py/core/main/services/management_service.py`)
+- **Method**: `create_collection()`
+- **Dual Creation**: Creates both collection record AND associated graph
+- **Returns**: `CollectionResponse` object
+
+#### Database Handler (`py/core/providers/database/collections.py`)
+- **Method**: `create_collection()`
+- **Table**: Creates record in `collections` table
+- **Default Handling**: Uses default collection name if none provided
+- **Unique Constraint**: Enforces unique (owner_id, name) combination
+
+### Collection Creation Flow
+
+1. **API Request** → User sends POST to `/collections` with name and description
+2. **Authentication** → Validates user credentials and permissions
+3. **Limits Check** → Ensures user hasn't exceeded max collections limit
+4. **Service Call** → `ManagementService.create_collection()` is invoked
+5. **Database Insert** → Collection record created in PostgreSQL
+6. **Graph Creation** → Associated knowledge graph automatically created
+7. **User Assignment** → Creating user automatically added as collection member
+8. **Response** → Returns `CollectionResponse` with collection details
+
+### Database Schema
+
+Collections are stored with the following PostgreSQL schema:
+
+```sql
+CREATE TABLE IF NOT EXISTS collections (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    owner_id UUID,
+    name TEXT NOT NULL,
+    description TEXT,
+    graph_sync_status TEXT DEFAULT 'pending',
+    graph_cluster_status TEXT DEFAULT 'pending', 
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    user_count INT DEFAULT 0,
+    document_count INT DEFAULT 0,
+    CONSTRAINT unique_owner_collection_name UNIQUE (owner_id, name)
+);
+```
+
+### Access Control & Permissions
+
+Collections implement a role-based access control system:
+
+#### Owner Permissions (Full Access)
+- **View**: Can see collection details and contents
+- **Edit**: Can modify collection name and description
+- **Delete**: Can delete the collection (except default collection)
+- **Manage Users**: Can add/remove users from collection
+- **Add Documents**: Can assign documents to collection
+- **Remove Documents**: Can remove documents from collection
+
+#### Member Permissions (View Only)
+- **View**: Can see collection details and contents
+- All other operations restricted
+
+#### Superuser Permissions
+- **Full Access**: Can perform all operations on any collection
+- **System Override**: Can bypass ownership restrictions
+
+### Default Collections
+
+Each user automatically receives a default collection:
+
+- **Auto-Creation**: Generated when user is created
+- **Consistent ID**: Uses `generate_default_user_collection_id(owner_id)`
+- **Protection**: Cannot be deleted
+- **Default Name**: Uses `config.default_collection_name`
+
+### Graph Integration
+
+Every collection has an associated knowledge graph:
+
+- **Automatic Creation**: Graph created synchronously with collection
+- **Sync Status**: Tracked via `graph_sync_status` field
+- **Cluster Status**: Tracked via `graph_cluster_status` field
+- **Document Integration**: Graphs extract entities/relationships from collection documents
+
+### SDK Integration
+
+Both synchronous and asynchronous SDKs support collection operations:
+
+```python
+# Sync SDK
+client.collections.create(
+    name="My New Collection",
+    description="Collection description"
+)
+
+# Async SDK
+await client.collections.create(
+    name="My New Collection", 
+    description="Collection description"
+)
+```
+
+### Collection Lifecycle
+
+1. **Creation**: API → Service → Database Handler → Graph Creation (for regular collections)
+2. **Membership**: Creator automatically added as member
+3. **Document Assignment**: Documents linked via `collection_ids` array
+4. **Graph Population**: Knowledge graphs built from document content (regular collections only)
+5. **Search Integration**: Collections provide context boundaries
+6. **Deletion**: Removes collection, graph, and vector relationships
+
+### Cache Collections
+
+R2R now supports creating collections without knowledge graphs for semantic caching use cases:
+
+#### Cache Collection Methods
+
+```python
+# Create a cache collection (no knowledge graph)
+# Name will automatically become "Semantic Cache Collection_cache"
+cache_collection = await management_service.create_cache_collection(
+    owner_id=user_id,
+    name="Semantic Cache Collection",
+    description="Collection for caching embeddings"
+)
+
+# Create cache collection without name - will use "{collection_id}_cache"
+cache_collection = await management_service.create_cache_collection(
+    owner_id=user_id,
+    description="Auto-named cache collection"
+)
+
+# Check if a collection is a cache collection
+is_cache = await management_service.is_cache_collection(collection_id)
+
+# Delete a cache collection (no graph cleanup needed)
+await management_service.delete_cache_collection(collection_id)
+```
+
+#### Cache Collection Benefits
+
+- **Performance**: No overhead from graph creation and maintenance
+- **Resource Efficiency**: Lower memory and storage requirements
+- **Simplified Operations**: Faster creation and deletion
+- **Semantic Caching**: Ideal for storing pre-computed embeddings and results
+
+#### When to Use Cache Collections
+
+- **Semantic Caching**: Store embeddings and search results for faster retrieval
+- **Temporary Storage**: Short-term document storage without complex relationships
+- **Performance Critical**: Applications where graph overhead is unnecessary
+- **Large Scale Caching**: High-volume scenarios where speed is prioritized
+
+Collections serve as the organizational backbone of R2R, providing structured access control. Regular collections automatically maintain associated knowledge graphs for enhanced search and RAG capabilities, while cache collections optimize for performance in caching scenarios.
+
+5. [Collections System](#collections-system)
+   - [Collection Creation Architecture](#collection-creation-architecture)
+   - [Collection Creation Flow](#collection-creation-flow) 
+   - [Database Schema](#database-schema)
+   - [Access Control & Permissions](#access-control--permissions)
+   - [Default Collections](#default-collections)
+   - [Graph Integration](#graph-integration)
+   - [SDK Integration](#sdk-integration) 
+   - [Collection Lifecycle](#collection-lifecycle)
+6. [Data Ingestion](#data-ingestion)
    - [Introduction](#introduction-1)
    - [Ingestion Modes](#ingestion-modes)
    - [Ingesting Documents](#ingesting-documents)

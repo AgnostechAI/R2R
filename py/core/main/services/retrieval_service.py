@@ -977,6 +977,192 @@ class RetrievalService(Service):
             text=text
         )
 
+    async def check_semantic_cache(
+        self,
+        query: str,
+        search_settings: SearchSettings,
+        cache_settings: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """Check semantic cache for similar queries before performing RAG.
+        
+        Args:
+            query: The user's query
+            search_settings: Search settings containing collection filters
+            cache_settings: Cache configuration (threshold, enabled, etc.)
+            
+        Returns:
+            dict: Cached RAG response if found, None if cache miss
+        """
+        from core.base import CacheSettings
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Parse cache settings
+            settings = cache_settings or {}
+            cache_config = CacheSettings(**settings)
+            
+            # Skip cache if disabled or bypassed
+            if not cache_config.enabled or cache_config.bypass_cache:
+                logger.debug("Semantic cache disabled or bypassed")
+                return None
+            
+            # Extract collection IDs from search settings
+            collection_ids = self._extract_collection_ids_from_filters(search_settings.filters)
+            if not collection_ids:
+                logger.debug("No collection IDs found in search filters, skipping cache")
+                return None
+            
+            # Search cache for each collection
+            for collection_id in collection_ids:
+                cache_hits = await self.providers.ingestion.search_cache_entries(
+                    query=query,
+                    collection_id=collection_id,
+                    similarity_threshold=cache_config.similarity_threshold,
+                    limit=1  # We only need the best match
+                )
+                
+                if cache_hits:
+                    best_hit = cache_hits[0]
+                    
+                    # Log cache hit
+                    logger.info(
+                        f"Cache HIT for query '{query[:50]}...' "
+                        f"(similarity: {best_hit['similarity_score']:.3f})"
+                    )
+                    
+                    # Increment hit count
+                    await self.providers.ingestion.increment_cache_hit_count(
+                        best_hit["id"]
+                    )
+                    
+                    # Return cached response in RAGResponse format
+                    return {
+                        "generated_answer": best_hit["generated_answer"],
+                        "search_results": best_hit["search_results"],
+                        "citations": best_hit["citations"],
+                        "completion": best_hit["generated_answer"],
+                        "metadata": {
+                            **best_hit.get("metadata", {}),
+                            "cache_hit": True,
+                            "cache_similarity": best_hit["similarity_score"],
+                            "cache_entry_id": str(best_hit["id"]),
+                            "original_query": best_hit["original_query"]
+                        }
+                    }
+            
+            logger.debug(f"Cache MISS for query '{query[:50]}...'")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking semantic cache: {e}")
+            return None
+
+    async def store_rag_response_in_cache(
+        self,
+        query: str,
+        rag_response: dict,
+        search_settings: SearchSettings,
+        owner_id: Optional[UUID] = None,
+        cache_settings: Optional[dict] = None,
+    ) -> None:
+        """Store a RAG response in the semantic cache.
+        
+        Args:
+            query: The original query
+            rag_response: The RAG response to cache
+            search_settings: Search settings containing collection filters  
+            owner_id: ID of the user who made the query
+            cache_settings: Cache configuration
+        """
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Parse cache settings
+            settings = cache_settings or {}
+            from core.base import CacheSettings
+            cache_config = CacheSettings(**settings)
+            
+            # Skip caching if disabled
+            if not cache_config.enabled:
+                return
+            
+            # Extract collection IDs from search settings
+            collection_ids = self._extract_collection_ids_from_filters(search_settings.filters)
+            if not collection_ids:
+                logger.debug("No collection IDs found, skipping cache storage")
+                return
+            
+            # Store in cache for each collection
+            for collection_id in collection_ids:
+                try:
+                    result = await self.providers.ingestion.store_cache_entry(
+                        query=query,
+                        response=rag_response,
+                        collection_id=collection_id,
+                        owner_id=owner_id or UUID("00000000-0000-0000-0000-000000000000"),
+                        cache_settings=cache_settings
+                    )
+                    logger.info(f"Cached RAG response for collection {collection_id}: {result}")
+                    
+                except Exception as e:
+                    logger.error(f"Error caching response for collection {collection_id}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error storing RAG response in cache: {e}")
+
+    def _extract_collection_ids_from_filters(self, filters: dict) -> list[UUID]:
+        """Extract collection IDs from search filter settings.
+        
+        Args:
+            filters: Search filters dict
+            
+        Returns:
+            list[UUID]: List of collection IDs found in filters
+        """
+        collection_ids = []
+        
+        try:
+            # Check for collection_ids in various filter formats
+            if "collection_ids" in filters:
+                coll_filter = filters["collection_ids"]
+                
+                # Handle different filter formats:
+                # {"collection_ids": {"$overlap": [...]}}
+                if isinstance(coll_filter, dict):
+                    if "$overlap" in coll_filter:
+                        ids = coll_filter["$overlap"]
+                    elif "$in" in coll_filter:
+                        ids = coll_filter["$in"]
+                    elif "$eq" in coll_filter:
+                        ids = [coll_filter["$eq"]]
+                    else:
+                        ids = []
+                # {"collection_ids": [...]}
+                elif isinstance(coll_filter, list):
+                    ids = coll_filter
+                # {"collection_ids": "single_id"}
+                else:
+                    ids = [coll_filter]
+                
+                # Convert to UUIDs
+                for id_val in ids:
+                    try:
+                        if isinstance(id_val, UUID):
+                            collection_ids.append(id_val)
+                        else:
+                            collection_ids.append(UUID(str(id_val)))
+                    except (ValueError, TypeError):
+                        continue
+                        
+        except Exception:
+            pass
+            
+        return collection_ids
+
     async def rag(
         self,
         query: str,
@@ -991,17 +1177,43 @@ class RetrievalService(Service):
         A single RAG method that can do EITHER a one-shot synchronous RAG or
         streaming SSE-based RAG, depending on rag_generation_config.stream.
 
-        1) Perform aggregator search => context
-        2) Build system+task prompts => messages
-        3) If not streaming => normal LLM call => return RAGResponse
-        4) If streaming => return an async generator of SSE lines
+        1) Check semantic cache for similar queries
+        2) If cache miss: Perform aggregator search => context
+        3) Build system+task prompts => messages
+        4) If not streaming => normal LLM call => return RAGResponse
+        5) If streaming => return an async generator of SSE lines
+        6) Store successful responses in cache
         """
         # 1) Possibly fix up any UUID filters in search_settings
         for f, val in list(search_settings.filters.items()):
             if isinstance(val, UUID):
                 search_settings.filters[f] = str(val)
 
+        # Extract cache settings and owner ID from kwargs
+        cache_settings = kwargs.get("cache_settings")
+        owner_id = kwargs.get("owner_id")
+
         try:
+            # 2) Check semantic cache first (only for non-streaming)
+            if not rag_generation_config.stream:
+                cached_response = await self.check_semantic_cache(
+                    query=query,
+                    search_settings=search_settings,
+                    cache_settings=cache_settings
+                )
+                
+                if cached_response:
+                    # Return cached response as RAGResponse
+                    from shared.api.models.retrieval.responses import RAGResponse, Citation
+                    from shared.abstractions.search import AggregateSearchResult
+                    
+                    return RAGResponse(
+                        generated_answer=cached_response["generated_answer"],
+                        search_results=cached_response.get("search_results", AggregateSearchResult()),
+                        citations=cached_response.get("citations", []),
+                        metadata=cached_response.get("metadata", {}),
+                        completion=cached_response["completion"]
+                    )
             # 2) Perform search => aggregated_results
             aggregated_results = await self.search(query, search_settings)
             # 3) Optionally add web search results if flag is enabled
@@ -1070,6 +1282,23 @@ class RetrievalService(Service):
                     metadata=metadata,
                     completion=llm_text or "",
                 )
+                
+                # (d) Store successful response in cache
+                if llm_text and owner_id:  # Only cache if we have a valid response and owner
+                    try:
+                        await self.store_rag_response_in_cache(
+                            query=query,
+                            rag_response=rag_resp.model_dump(),
+                            search_settings=search_settings,
+                            owner_id=owner_id,
+                            cache_settings=cache_settings
+                        )
+                    except Exception as cache_error:
+                        # Log cache storage error but don't fail the request
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(f"Failed to cache RAG response: {cache_error}")
+                
                 return rag_resp
 
             else:

@@ -172,15 +172,28 @@ class CollectionsRouter(BaseRouterV3):
                     f"User has reached the maximum number of collections allowed ({user_max_collections}).",
                     400,
                 )
+            # Create the regular collection (with knowledge graph)
             collection = await self.services.management.create_collection(
                 owner_id=auth_user.id,
                 name=name,
                 description=description,
             )
-            # Add the creating user to the collection
+            # Add the creating user to the regular collection
             await self.services.management.add_user_to_collection(
                 auth_user.id, collection.id
             )
+            
+            # Also create the associated cache collection (without knowledge graph)
+            cache_collection = await self.services.management.create_cache_collection(
+                owner_id=auth_user.id,
+                base_name=name,  # This will become "{name}_cache"
+                description=f"Cache for {description}" if description else "Associated cache collection",
+            )
+            # Add the creating user to the cache collection too
+            await self.services.management.add_user_to_collection(
+                auth_user.id, cache_collection.id
+            )
+            
             return collection  # type: ignore
 
         @self.router.post(

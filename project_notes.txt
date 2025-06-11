@@ -1,0 +1,193 @@
+# R2R Semantic Cache Implementation - Project Notes
+
+## Project Overview
+Implementation of a semantic cache layer for R2R's RAG system to provide instant responses for similar queries, improving performance and reducing LLM costs.
+
+## Current Status: Phase 4 Complete ✅ - SEMANTIC CACHE FULLY IMPLEMENTED
+
+### Phase 1: Cache Storage Infrastructure ✅ COMPLETED
+**Files Modified:**
+- `py/shared/abstractions/cache.py` - Cache models and settings
+- `py/core/main/services/ingestion_service.py` - Cache storage methods
+
+**Key Components:**
+- `CacheSettings` - Configurable cache behavior (threshold, TTL, size limits) 
+- `CacheEntry` - Core model for query-response pairs with embeddings
+- `CacheSearchResult` - Cache lookup results
+- `CacheMetrics` - Performance tracking
+- `store_cache_entry()` - Store RAG responses as searchable vectors
+- `search_cache_entries()` - Find similar queries using cosine similarity
+- `increment_cache_hit_count()` - Track usage statistics
+- `_get_cache_collection_id()` - Helper to locate cache collections
+
+**Key Features:**
+- Indefinite storage support (TTL=0 means never expires)
+- Configurable similarity thresholds for cache hits
+- Vector-based semantic search for query matching
+- Usage tracking and metrics collection
+
+### Phase 2: Cache Retrieval Logic ✅ COMPLETED  
+**Files Modified:**
+- `py/core/main/services/retrieval_service.py` - Cache lookup and RAG integration
+
+**Key Components:**
+- `check_semantic_cache()` - Check cache before performing RAG
+- `store_rag_response_in_cache()` - Store successful RAG responses in cache
+- `_extract_collection_ids_from_filters()` - Extract collection IDs from search filters
+
+**Integration Points:**
+- Modified `rag()` method to check cache first (non-streaming only)
+- Automatic cache storage after successful RAG responses  
+- Collection ID extraction from search settings
+- Error handling for cache operations (doesn't fail RAG on cache errors)
+- Cache bypass and disable functionality
+
+**Cache Flow:**
+1. User makes RAG query with collection filters
+2. Extract collection IDs from search settings
+3. Check cache collections for similar queries (cosine similarity > threshold)
+4. If cache hit: return cached response + increment hit count
+5. If cache miss: proceed with normal RAG pipeline
+6. Store successful RAG response in cache for future queries
+
+### Phase 3: API Integration ✅ COMPLETED
+**Files Modified:**
+- `py/core/main/api/v3/retrieval_router.py` - RAG endpoint cache parameters
+
+**Key Components:**
+- Cache parameter additions to `/retrieval/rag` endpoint:
+  - `cache_enabled` - Enable/disable semantic cache
+  - `cache_similarity_threshold` - Minimum similarity for cache hits (0-1)
+  - `cache_ttl_seconds` - Cache expiration time (0 = indefinite)
+  - `bypass_cache` - Skip cache lookup for fresh results
+- Cache settings preparation and validation
+- Owner ID extraction from authentication context
+- Service integration with cache_settings and owner_id parameters
+
+**API Enhancements:**
+- Updated endpoint documentation with cache examples
+- Cache configuration examples in API docs
+- Response metadata indicating cache hits and similarity scores
+- Support for all cache scenarios (enabled/disabled, bypass, TTL, thresholds)
+
+**Cache API Usage:**
+```json
+POST /retrieval/rag
+{
+  "query": "What is machine learning?",
+  "search_settings": {"filters": {"collection_ids": {"$overlap": ["collection-id"]}}},
+  "cache_enabled": true,
+  "cache_similarity_threshold": 0.85,
+  "cache_ttl_seconds": 0,
+  "bypass_cache": false
+}
+```
+
+## Architecture Decisions
+
+### Cache Storage Strategy
+- **Location**: Store in existing cache collections (collection_name + "_cache" suffix)
+- **Format**: Store as VectorEntry objects with query text and response metadata
+- **Search**: Use semantic search with configurable similarity threshold (default 0.85)
+- **Scoping**: Cache entries are collection-specific via search filters
+
+### Performance Considerations
+- **Non-blocking**: Cache errors don't fail RAG requests
+- **Non-streaming only**: Cache currently only works for non-streaming RAG
+- **Similarity threshold**: Configurable to balance cache hits vs accuracy
+- **TTL support**: 0 = indefinite storage, >0 = expiration in seconds
+
+### Cache Entry Structure
+```python
+{
+    "id": "cache_entry_uuid",
+    "text": "What is machine learning?",  # Query as searchable text
+    "vector": [0.1, 0.2, ...],        # Query embedding
+    "metadata": {
+        "type": "semantic_cache_entry",
+        "original_query": "What is machine learning?",
+        "generated_answer": "Machine learning is...",
+        "search_results": {...},      # Serialized search results
+        "citations": [...],           # Serialized citations
+        "cached_at": "2025-01-11T...",
+        "cache_ttl": 0,              # 0 = never expires
+        "hit_count": 5,              # Usage tracking
+        "collection_id": "original_collection_uuid"
+    }
+}
+```
+
+### Phase 4: Configuration & Controls ✅ COMPLETED
+**Files Modified:**
+- `py/core/main/services/ingestion_service.py` - Added cache management methods
+- `py/core/main/api/v3/system_router.py` - Added cache management endpoints
+
+**Key Components:**
+- `get_cache_analytics()` - Comprehensive cache performance metrics and statistics
+- `invalidate_cache_entries()` - Flexible cache invalidation with multiple criteria:
+  - Query pattern matching (regex)
+  - Age-based deletion (older than X hours)
+  - Hit count threshold (unused entries)
+  - Complete cache clearing
+- `cleanup_expired_cache_entries()` - TTL-based automatic cache cleanup
+- `increment_cache_hit_count()` - Enhanced with last_accessed tracking
+
+**Management API Endpoints:**
+- `GET /system/cache/analytics/{collection_id}` - Get cache performance metrics
+- `POST /system/cache/invalidate/{collection_id}` - Invalidate cache entries by criteria
+- `POST /system/cache/cleanup` - Clean up expired cache entries
+
+**Analytics Features:**
+- Total entries and hit counts
+- Most popular queries by hit count
+- Cache size estimation (MB)
+- Entry distribution by hit count buckets
+- Oldest/newest entry timestamps
+- Average hits per entry
+
+**Cache Management Features:**
+- Pattern-based invalidation (regex query matching)
+- Time-based cleanup (age thresholds)
+- Usage-based cleanup (hit count thresholds)
+- Complete cache clearing
+- TTL-based expiration cleanup
+- Multi-collection management support
+
+## Implementation Fully Complete ✅
+
+All 4 phases of the semantic cache implementation are now complete:
+1. ✅ Cache Storage Infrastructure
+2. ✅ Cache Retrieval Logic  
+3. ✅ API Integration
+4. ✅ Configuration & Controls
+
+## Benefits Achieved
+- ✅ Instant responses for similar queries via semantic matching
+- ✅ Reduced LLM costs by avoiding redundant calls
+- ✅ Configurable cache behavior per collection
+- ✅ Non-invasive implementation (existing RAG unchanged when disabled)
+- ✅ Indefinite storage capability for permanent caching
+- ✅ Usage tracking for cache optimization
+- ✅ RESTful API integration with cache parameters
+- ✅ User-configurable cache thresholds and TTL
+- ✅ Cache bypass capability for testing and fresh results
+
+## Testing Completed
+- Collection ID extraction from various filter formats
+- Cache miss handling (disabled cache, no hits)
+- Cache bypass functionality
+- Cache storage and retrieval simulation
+- Error handling validation
+
+## Current Limitations
+- Only supports non-streaming RAG requests
+- Requires cache collections to be pre-created
+- No automatic cache invalidation on document updates
+- No cache analytics UI yet
+
+## Files Created/Modified Summary
+1. `py/shared/abstractions/cache.py` - NEW: Cache models and settings
+2. `py/core/main/services/ingestion_service.py` - MODIFIED: Added cache storage methods
+3. `py/core/main/services/retrieval_service.py` - MODIFIED: Added cache lookup and integration
+4. `py/core/main/api/v3/retrieval_router.py` - MODIFIED: Added cache parameters to RAG endpoint
+5. `semantic_cache_plan.md` - NEW: Implementation plan and documentation 

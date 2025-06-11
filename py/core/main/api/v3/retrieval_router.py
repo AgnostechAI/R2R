@@ -236,6 +236,23 @@ class RetrievalRouter(BaseRouterV3):
                 default=False,
                 description="Include web search results provided to the LLM.",
             ),
+            # Cache configuration
+            cache_enabled: bool = Body(
+                default=True,
+                description="Enable semantic cache for this query. Cache stores query-response pairs to provide instant responses for similar queries.",
+            ),
+            cache_similarity_threshold: float = Body(
+                default=0.85,
+                description="Minimum similarity score (0-1) for cache hits. Higher values require more exact matches.",
+            ),
+            cache_ttl_seconds: int = Body(
+                default=0,
+                description="Cache entry time-to-live in seconds. 0 = indefinite storage, >0 = expiration time.",
+            ),
+            bypass_cache: bool = Body(
+                default=False,
+                description="Skip cache lookup and force fresh RAG generation. Useful for testing or when fresh results are required.",
+            ),
             auth_user=Depends(self.providers.auth.auth_wrapper()),
         ) -> WrappedRAGResponse:
             """Execute a RAG (Retrieval-Augmented Generation) query.
@@ -277,6 +294,23 @@ class RetrievalRouter(BaseRouterV3):
             - `citation`: Citation metadata when sources are referenced
             - `final_answer`: Complete answer with structured citations
 
+            **Semantic Cache:**
+            The system includes intelligent caching to improve performance:
+            - Similar queries return cached responses instantly
+            - Configurable similarity threshold for cache hits
+            - Indefinite storage (default) or time-based expiration
+            - Cache bypass option for fresh results
+
+            **Cache Configuration:**
+            ```json
+            {
+                "cache_enabled": true,              // Enable/disable caching
+                "cache_similarity_threshold": 0.85, // Similarity required for cache hit
+                "cache_ttl_seconds": 0,             // 0 = indefinite, >0 = expiration
+                "bypass_cache": false               // Skip cache lookup
+            }
+            ```
+
             **Example Response:**
             ```json
             {
@@ -288,7 +322,12 @@ class RetrievalRouter(BaseRouterV3):
                     "object": "citation",
                     "payload": { ... }
                 }
-            ]
+            ],
+            "metadata": {
+                "cache_hit": true,           // Indicates if response came from cache
+                "cache_similarity": 0.92,   // Similarity score for cache hit
+                "model": "openai/gpt-4o-mini"
+            }
             }
             ```
             """
@@ -300,6 +339,14 @@ class RetrievalRouter(BaseRouterV3):
                 auth_user, search_mode, search_settings
             )
 
+            # Prepare cache settings
+            cache_settings = {
+                "enabled": cache_enabled,
+                "similarity_threshold": cache_similarity_threshold,
+                "ttl_seconds": cache_ttl_seconds,
+                "bypass_cache": bypass_cache,
+            }
+
             response = await self.services.retrieval.rag(
                 query=query,
                 search_settings=effective_settings,
@@ -307,6 +354,8 @@ class RetrievalRouter(BaseRouterV3):
                 task_prompt=task_prompt,
                 include_title_if_available=include_title_if_available,
                 include_web_search=include_web_search,
+                cache_settings=cache_settings,
+                owner_id=auth_user.id,
             )
 
             if rag_generation_config.stream:

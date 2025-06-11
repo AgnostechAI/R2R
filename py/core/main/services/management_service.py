@@ -562,6 +562,44 @@ class ManagementService(Service):
         )
         return result
 
+    async def create_cache_collection(
+        self,
+        owner_id: UUID,
+        base_name: Optional[str] = None,
+        description: str | None = None,
+    ) -> CollectionResponse:
+        """Create a cache collection directly with the proper cache naming.
+        
+        This bypasses the auto-naming logic of create_cache_collection and 
+        directly creates a collection with "_cache" suffix.
+        
+        Args:
+            owner_id: UUID of the collection owner
+            base_name: Base name for the collection (will have "_cache" appended)
+            description: Optional description for the collection
+            
+        Returns:
+            CollectionResponse: The created cache collection
+        """
+        # Determine the cache name
+        if base_name:
+            cache_name = f"{base_name}_cache"
+        else:
+            # Generate a UUID for the name if no base name provided
+            import uuid
+            cache_name = f"{uuid.uuid4()}_cache"
+        
+        # Create the cache collection directly with the correct name
+        result = await self.providers.database.collections_handler.create_collection(
+            owner_id=owner_id,
+            name=cache_name,
+            description=description,
+        )
+        
+        # Note: Intentionally skipping graph creation for cache collections
+        logger.info(f"Created cache collection {result.id} with name '{cache_name}' without knowledge graph")
+        return result
+
     async def update_collection(
         self,
         collection_id: UUID,
@@ -595,6 +633,48 @@ class ManagementService(Service):
                 f"Error deleting graph for collection {collection_id}: {e}"
             )
         return True
+
+    async def delete_cache_collection(self, collection_id: UUID) -> bool:
+        """Delete a cache collection without attempting to delete associated graphs.
+        
+        This is specifically for cache collections that were created without
+        knowledge graphs using create_cache_collection().
+        
+        Args:
+            collection_id: UUID of the collection to delete
+            
+        Returns:
+            bool: True if deletion was successful
+        """
+        await self.providers.database.collections_handler.delete_collection_relational(
+            collection_id
+        )
+        await self.providers.database.chunks_handler.delete_collection_vector(
+            collection_id
+        )
+        # Note: Intentionally skipping graph deletion for cache collections
+        logger.info(f"Deleted cache collection {collection_id} (no graph to delete)")
+        return True
+
+    async def is_cache_collection(self, collection_id: UUID) -> bool:
+        """Check if a collection is a cache collection (has no associated graph).
+        
+        Args:
+            collection_id: UUID of the collection to check
+            
+        Returns:
+            bool: True if it's a cache collection (no graph), False otherwise
+        """
+        try:
+            graphs_response = await self.providers.database.graphs_handler.list_graphs(
+                offset=0,
+                limit=1,
+                filter_collection_id=collection_id,
+            )
+            return len(graphs_response["results"]) == 0
+        except Exception as e:
+            logger.warning(f"Error checking if collection {collection_id} is cache collection: {e}")
+            return False
 
     async def collections_overview(
         self,

@@ -1,9 +1,11 @@
 import logging
 import textwrap
 from datetime import datetime, timezone
+from typing import Optional
+from uuid import UUID
 
 import psutil
-from fastapi import Depends
+from fastapi import Body, Depends
 
 from core.base import R2RException
 from core.base.api.models import (
@@ -184,3 +186,108 @@ class SystemRouter(BaseRouterV3):
                 "cpu_usage": psutil.cpu_percent(),
                 "memory_usage": psutil.virtual_memory().percent,
             }
+
+        @self.router.get(
+            "/system/cache/analytics/{collection_id}",
+            dependencies=[Depends(self.rate_limit_dependency)],
+            summary="Get Cache Analytics",
+        )
+        @self.base_endpoint
+        async def get_cache_analytics(
+            collection_id: UUID,
+            auth_user=Depends(self.providers.auth.auth_wrapper()),
+        ):
+            """Get analytics and performance metrics for semantic cache.
+            
+            Returns cache statistics including:
+            - Total entries and hit counts
+            - Most popular queries
+            - Cache size and distribution
+            - Performance metrics
+            """
+            if not auth_user.is_superuser:
+                raise R2RException(
+                    "Only a superuser can access cache analytics.",
+                    403,
+                )
+            
+            analytics = await self.services.ingestion.get_cache_analytics(collection_id)
+            return {"analytics": analytics}
+
+        @self.router.post(
+            "/system/cache/invalidate/{collection_id}",
+            dependencies=[Depends(self.rate_limit_dependency)],
+            summary="Invalidate Cache Entries",
+        )
+        @self.base_endpoint
+        async def invalidate_cache_entries(
+            collection_id: UUID,
+            query_patterns: Optional[list[str]] = Body(
+                None,
+                description="List of regex patterns to match queries for deletion"
+            ),
+            older_than_hours: Optional[int] = Body(
+                None,
+                description="Delete entries older than X hours"
+            ),
+            hit_count_threshold: Optional[int] = Body(
+                None,
+                description="Delete entries with hit count below threshold"
+            ),
+            delete_all: bool = Body(
+                False,
+                description="Delete all cache entries for this collection"
+            ),
+            auth_user=Depends(self.providers.auth.auth_wrapper()),
+        ):
+            """Invalidate cache entries based on various criteria.
+            
+            Supports deletion by:
+            - Query patterns (regex matching)
+            - Age (older than X hours)
+            - Hit count threshold (unused entries)
+            - Complete cache clearing
+            """
+            if not auth_user.is_superuser:
+                raise R2RException(
+                    "Only a superuser can invalidate cache entries.",
+                    403,
+                )
+            
+            result = await self.services.ingestion.invalidate_cache_entries(
+                collection_id=collection_id,
+                query_patterns=query_patterns,
+                older_than_hours=older_than_hours,
+                hit_count_threshold=hit_count_threshold,
+                delete_all=delete_all
+            )
+            return {"invalidation_result": result}
+
+        @self.router.post(
+            "/system/cache/cleanup",
+            dependencies=[Depends(self.rate_limit_dependency)],
+            summary="Cleanup Expired Cache Entries",
+        )
+        @self.base_endpoint
+        async def cleanup_expired_cache(
+            collection_id: Optional[UUID] = Body(
+                None,
+                description="Specific collection to clean, or None for all collections"
+            ),
+            auth_user=Depends(self.providers.auth.auth_wrapper()),
+        ):
+            """Clean up expired cache entries based on TTL.
+            
+            Removes entries that have exceeded their time-to-live (TTL).
+            If no collection_id provided, cleans all collections.
+            """
+            if not auth_user.is_superuser:
+                raise R2RException(
+                    "Only a superuser can cleanup cache entries.",
+                    403,
+                )
+            
+            result = await self.services.ingestion.cleanup_expired_cache_entries(
+                collection_id=collection_id
+            )
+            return {"cleanup_result": result}
