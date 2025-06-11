@@ -1204,7 +1204,6 @@ class RetrievalService(Service):
                 
                 if cached_response:
                     # Return cached response as RAGResponse
-                    from shared.api.models.retrieval.responses import RAGResponse, Citation
                     from shared.abstractions.search import AggregateSearchResult
                     
                     return RAGResponse(
@@ -1296,8 +1295,8 @@ class RetrievalService(Service):
                     except Exception as cache_error:
                         # Log cache storage error but don't fail the request
                         import logging
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Failed to cache RAG response: {cache_error}")
+                        cache_logger = logging.getLogger(__name__)
+                        cache_logger.warning(f"Failed to cache RAG response: {cache_error}")
                 
                 return rag_resp
 
@@ -1460,7 +1459,9 @@ class RetrievalService(Service):
                 return sse_generator()
 
         except Exception as e:
-            logger.exception(f"Error in RAG pipeline: {e}")
+            import logging
+            error_logger = logging.getLogger(__name__)
+            error_logger.exception(f"Error in RAG pipeline: {e}")
             if "NoneType" in str(e):
                 raise HTTPException(
                     status_code=502,
