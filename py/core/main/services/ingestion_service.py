@@ -1,7 +1,8 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 from typing import Any, AsyncGenerator, Optional, Sequence
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from core.base import (
     VectorEntry,
     VectorType,
     generate_id,
+    SearchSettings,
 )
 from core.base.abstractions import (
     ChunkEnrichmentSettings,
@@ -846,9 +848,6 @@ class IngestionService:
         Returns:
             str: Success message with cache entry ID
         """
-        from core.base import VectorEntry, Vector, VectorType, generate_id
-        import json
-        from datetime import datetime
         
         try:
             # Get cache collection ID (original collection ID + "_cache")
@@ -965,8 +964,6 @@ class IngestionService:
         Returns:
             list[dict]: List of matching cache entries with similarity scores
         """
-        from datetime import datetime
-        import json
         
         try:
             # Get cache collection ID
@@ -976,7 +973,6 @@ class IngestionService:
             query_embedding = await self.providers.embedding.async_get_embedding(query)
             
             # Search cache collection for similar queries
-            from core.base import SearchSettings
             search_settings = SearchSettings(
                 use_semantic_search=True,
                 limit=limit,
@@ -1027,8 +1023,6 @@ class IngestionService:
 
     async def increment_cache_hit_count(self, cache_entry_id: UUID) -> None:
         """Increment the hit count for a cache entry."""
-        import json
-        
         try:
             # Get the current cache entry
             cache_entry = await self.providers.database.chunks_handler.get_chunk(cache_entry_id)
@@ -1042,7 +1036,6 @@ class IngestionService:
             metadata["last_accessed"] = datetime.now().isoformat()
             
             # Create updated vector entry
-            from core.base import VectorEntry, Vector, VectorType
             updated_entry = VectorEntry(
                 id=cache_entry_id,
                 document_id=UUID(cache_entry["document_id"]),
@@ -1180,9 +1173,6 @@ class IngestionService:
         Returns:
             dict: Summary of deletion operation
         """
-        from datetime import datetime, timedelta
-        import re
-        
         try:
             # Get cache collection ID
             cache_collection_id = await self._get_cache_collection_id(collection_id)
@@ -1271,7 +1261,6 @@ class IngestionService:
         Returns:
             dict: Summary of cleanup operation
         """
-        from datetime import datetime
         
         try:
             deleted_count = 0

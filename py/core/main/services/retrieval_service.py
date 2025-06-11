@@ -35,6 +35,7 @@ from core.base import (
     SearchSettings,
     WebSearchResult,
     format_search_results_for_llm,
+    CacheSettings,
 )
 from core.base.api.models import RAGResponse, User
 from core.utils import (
@@ -993,7 +994,6 @@ class RetrievalService(Service):
         Returns:
             dict: Cached RAG response if found, None if cache miss
         """
-        from core.base import CacheSettings
         import logging
         
         logger = logging.getLogger(__name__)
