@@ -1204,8 +1204,6 @@ class RetrievalService(Service):
                 
                 if cached_response:
                     # Return cached response as RAGResponse
-                    from shared.abstractions.search import AggregateSearchResult
-                    
                     return RAGResponse(
                         generated_answer=cached_response["generated_answer"],
                         search_results=cached_response.get("search_results", AggregateSearchResult()),
