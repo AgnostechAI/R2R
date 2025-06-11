@@ -1,8 +1,9 @@
 import asyncio
 import json
 import logging
+import re
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Literal, Optional
 from uuid import UUID
 
@@ -978,6 +979,238 @@ class RetrievalService(Service):
             text=text
         )
 
+    # CACHE METHODS - Moved from IngestionService for direct access
+    async def store_cache_entry(
+        self,
+        query: str,
+        response: dict,
+        collection_id: UUID,
+        owner_id: UUID,
+        cache_settings: Optional[dict] = None,
+    ) -> str:
+        """Store a RAG query-response pair in the semantic cache.
+        
+        Args:
+            query: The original query text
+            response: The RAG response containing generated_answer, search_results, etc.
+            collection_id: ID of the original collection
+            owner_id: ID of the user who made the query
+            cache_settings: Optional cache configuration settings
+            
+        Returns:
+            str: Success message with cache entry ID
+        """
+        from core.base import VectorEntry, Vector, VectorType
+        from core.utils import generate_id
+        
+        try:
+            # Get cache collection ID (original collection ID + "_cache")
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Generate embedding for the query
+            query_embedding = await self.providers.embedding.async_get_embedding(query)
+            
+            # Create cache entry ID
+            cache_entry_id = generate_id(f"cache_{query}_{collection_id}")
+            
+            # Create cache document ID  
+            cache_document_id = generate_id(f"cache_doc_{query}_{collection_id}")
+            
+            # Extract cache settings
+            settings = cache_settings or {}
+            ttl_seconds = settings.get("ttl_seconds", 0)  # 0 = indefinite storage by default
+            
+            # Create cache metadata
+            cache_metadata = {
+                "type": "semantic_cache_entry",
+                "original_query": query,
+                "generated_answer": response.get("generated_answer", ""),
+                "search_results": json.dumps(response.get("search_results", {})),
+                "citations": json.dumps(response.get("citations", [])),
+                "cached_at": datetime.now().isoformat(),
+                "cache_ttl": ttl_seconds,
+                "collection_id": str(collection_id),
+                "hit_count": 0,
+                "model_used": response.get("metadata", {}).get("model", "unknown"),
+                "response_tokens": len(response.get("generated_answer", "").split()),
+            }
+            
+            # Create vector entry for the cache
+            cache_vector_entry = VectorEntry(
+                id=cache_entry_id,
+                document_id=cache_document_id,
+                owner_id=owner_id,
+                collection_ids=[cache_collection_id],
+                vector=Vector(
+                    data=query_embedding,
+                    type=VectorType.FIXED,
+                    length=len(query_embedding)
+                ),
+                text=query,  # Store the query as the searchable text
+                metadata=cache_metadata,
+            )
+            
+            # Store the cache entry
+            await self.providers.database.chunks_handler.upsert_entries([cache_vector_entry])
+            
+            logger.info(f"Stored cache entry {cache_entry_id} for collection {collection_id}")
+            return f"Successfully cached entry {cache_entry_id}"
+            
+        except Exception as e:
+            logger.error(f"Error storing cache entry: {e}")
+            return f"Error storing cache entry: {e}"
+
+    async def _get_cache_collection_id(self, collection_id: UUID) -> UUID:
+        """Get the cache collection ID for a given collection.
+        
+        Looks up the cache collection (collection with "_cache" suffix) 
+        associated with the given collection ID.
+        """
+        try:
+            # Get collection info to find the cache collection
+            collections_overview = await self.providers.database.collections_handler.get_collections_overview(
+                offset=0,
+                limit=100,
+                filter_collection_ids=[collection_id]
+            )
+            
+            if not collections_overview["results"]:
+                raise ValueError(f"Collection {collection_id} not found")
+                
+            collection = collections_overview["results"][0]
+            collection_name = collection.name
+            
+            # Look for the cache collection (name + "_cache")
+            cache_name = f"{collection_name}_cache"
+            
+            # Search for cache collection by name
+            all_collections = await self.providers.database.collections_handler.get_collections_overview(
+                offset=0,
+                limit=1000,  # Get all collections to search by name
+                filter_user_ids=[collection.owner_id]
+            )
+            
+            for coll in all_collections["results"]:
+                if coll.name == cache_name:
+                    return coll.id
+                    
+            raise ValueError(f"Cache collection '{cache_name}' not found for collection '{collection_name}'")
+            
+        except Exception as e:
+            logger.error(f"Error getting cache collection ID: {e}")
+            raise
+
+    async def search_cache_entries(
+        self,
+        query: str,
+        collection_id: UUID,
+        similarity_threshold: float = 0.85,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Search for similar cached entries for a given query.
+        
+        Args:
+            query: The query to search for
+            collection_id: ID of the original collection
+            similarity_threshold: Minimum similarity score for cache hits
+            limit: Maximum number of results to return
+            
+        Returns:
+            list[dict]: List of matching cache entries with similarity scores
+        """
+        
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            
+            # Generate embedding for the query
+            query_embedding = await self.providers.embedding.async_get_embedding(query)
+            
+            # Search cache collection for similar queries
+            search_settings = SearchSettings(
+                use_semantic_search=True,
+                limit=limit,
+                include_scores=True,
+                include_metadatas=True,
+                filters={"collection_ids": {"$overlap": [str(cache_collection_id)]}}
+            )
+            
+            # Perform semantic search on cache collection
+            results = await self.providers.database.chunks_handler.semantic_search(
+                query_vector=query_embedding,
+                search_settings=search_settings
+            )
+            
+            # Filter by similarity threshold and check for expired entries
+            cache_hits = []
+            for result in results:
+                if result.score and result.score >= similarity_threshold:
+                    # Check if entry is expired (only if TTL > 0)
+                    cached_at_str = result.metadata.get("cached_at")
+                    cache_ttl = result.metadata.get("cache_ttl", 0)
+                    
+                    if cached_at_str and cache_ttl > 0:  # Only check expiration if TTL is set
+                        cached_at = datetime.fromisoformat(cached_at_str)
+                        elapsed = (datetime.now() - cached_at).total_seconds()
+                        
+                        if elapsed > cache_ttl:
+                            logger.info(f"Cache entry {result.id} expired, skipping")
+                            continue
+                    
+                    cache_hits.append({
+                        "id": result.id,
+                        "original_query": result.text,
+                        "generated_answer": result.metadata.get("generated_answer", ""),
+                        "search_results": json.loads(result.metadata.get("search_results", "{}")),
+                        "citations": json.loads(result.metadata.get("citations", "[]")),
+                        "similarity_score": result.score,
+                        "hit_count": result.metadata.get("hit_count", 0),
+                        "cached_at": result.metadata.get("cached_at"),
+                        "metadata": result.metadata
+                    })
+            
+            return cache_hits
+            
+        except Exception as e:
+            logger.error(f"Error searching cache entries: {e}")
+            return []
+
+    async def increment_cache_hit_count(self, cache_entry_id: UUID) -> None:
+        """Increment the hit count for a cache entry."""
+        from core.base import VectorEntry, Vector, VectorType
+        
+        try:
+            # Get the current cache entry
+            cache_entry = await self.providers.database.chunks_handler.get_chunk(cache_entry_id)
+            if not cache_entry:
+                logger.warning(f"Cache entry {cache_entry_id} not found")
+                return
+                
+            # Update hit count
+            metadata = json.loads(cache_entry["metadata"]) if isinstance(cache_entry["metadata"], str) else cache_entry["metadata"]
+            metadata["hit_count"] = metadata.get("hit_count", 0) + 1
+            metadata["last_accessed"] = datetime.now().isoformat()
+            
+            # Create updated vector entry
+            updated_entry = VectorEntry(
+                id=cache_entry_id,
+                document_id=UUID(cache_entry["document_id"]),
+                owner_id=UUID(cache_entry["owner_id"]),
+                collection_ids=cache_entry["collection_ids"],
+                vector=Vector(
+                    data=json.loads(cache_entry["vec"]) if isinstance(cache_entry["vec"], str) else cache_entry["vec"],
+                    type=VectorType.FIXED
+                ),
+                text=cache_entry["text"],
+                metadata=metadata,
+            )
+            
+            # Update the entry
+            await self.providers.database.chunks_handler.upsert_entries([updated_entry])
+            
+        except Exception as e:
+            logger.error(f"Error incrementing cache hit count: {e}")
+
     async def check_semantic_cache(
         self,
         query: str,
@@ -1016,7 +1249,7 @@ class RetrievalService(Service):
             
             # Search cache for each collection
             for collection_id in collection_ids:
-                cache_hits = await self.providers.ingestion.search_cache_entries(
+                cache_hits = await self.search_cache_entries(
                     query=query,
                     collection_id=collection_id,
                     similarity_threshold=cache_config.similarity_threshold,
@@ -1033,7 +1266,7 @@ class RetrievalService(Service):
                     )
                     
                     # Increment hit count
-                    await self.providers.ingestion.increment_cache_hit_count(
+                    await self.increment_cache_hit_count(
                         best_hit["id"]
                     )
                     
@@ -1099,7 +1332,7 @@ class RetrievalService(Service):
             # Store in cache for each collection
             for collection_id in collection_ids:
                 try:
-                    result = await self.providers.ingestion.store_cache_entry(
+                    result = await self.store_cache_entry(
                         query=query,
                         response=rag_response,
                         collection_id=collection_id,
