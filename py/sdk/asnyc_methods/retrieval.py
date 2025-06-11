@@ -182,6 +182,8 @@ class RetrievalSDK:
             cache_similarity_threshold (Optional[float]): Minimum similarity score (0-1) for cache hits (default: 0.85).
             cache_ttl_seconds (Optional[int]): Cache entry time-to-live in seconds. 0 = indefinite (default: 0).
             bypass_cache (Optional[bool]): Skip cache lookup and force fresh RAG generation (default: False).
+            cache_scope_collection_ids (Optional[list[str]]): Specific collection IDs to use for cache scoping. If provided, cache will be scoped to these collections regardless of search filters.
+            use_search_filters_for_cache_scope (Optional[bool]): Whether to extract collection IDs from search filters for cache scoping (default: True).
 
         Returns:
             Either a WrappedRAGResponse or an AsyncGenerator for streaming.

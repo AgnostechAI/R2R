@@ -1008,10 +1008,10 @@ class RetrievalService(Service):
                 logger.debug("Semantic cache disabled or bypassed")
                 return None
             
-            # Extract collection IDs from search settings
-            collection_ids = self._extract_collection_ids_from_filters(search_settings.filters)
+            # Extract collection IDs for cache scoping (separate from search filters)
+            collection_ids = self._extract_cache_scope_collection_ids(cache_settings, search_settings)
             if not collection_ids:
-                logger.debug("No collection IDs found in search filters, skipping cache")
+                logger.debug("No collection IDs found for cache scoping, skipping cache")
                 return None
             
             # Search cache for each collection
@@ -1090,10 +1090,10 @@ class RetrievalService(Service):
             if not cache_config.enabled:
                 return
             
-            # Extract collection IDs from search settings
-            collection_ids = self._extract_collection_ids_from_filters(search_settings.filters)
+            # Extract collection IDs for cache scoping (separate from search filters)
+            collection_ids = self._extract_cache_scope_collection_ids(cache_settings, search_settings)
             if not collection_ids:
-                logger.debug("No collection IDs found, skipping cache storage")
+                logger.debug("No collection IDs found for cache scoping, skipping cache storage")
                 return
             
             # Store in cache for each collection
@@ -1162,6 +1162,57 @@ class RetrievalService(Service):
             pass
             
         return collection_ids
+
+    def _extract_cache_scope_collection_ids(
+        self, 
+        cache_settings: dict, 
+        search_settings: SearchSettings
+    ) -> list[UUID]:
+        """Extract collection IDs for cache scoping, separate from search filters.
+        
+        This method implements Option 2: Separate cache scoping from search filters.
+        Cache scoping determines where to store/retrieve cache entries, while 
+        search filters determine which documents to search through.
+        
+        Args:
+            cache_settings: Cache configuration including scoping options
+            search_settings: Search settings with filters
+            
+        Returns:
+            list[UUID]: List of collection IDs to use for cache scoping
+        """
+        collection_ids = []
+        
+        try:
+            # Parse cache settings
+            from core.base import CacheSettings
+            cache_config = CacheSettings(**cache_settings)
+            
+            # Option 1: Use explicit cache scoping collection IDs
+            if cache_config.cache_scope_collection_ids:
+                for id_val in cache_config.cache_scope_collection_ids:
+                    try:
+                        if isinstance(id_val, UUID):
+                            collection_ids.append(id_val)
+                        else:
+                            collection_ids.append(UUID(str(id_val)))
+                    except (ValueError, TypeError):
+                        continue
+                        
+                return collection_ids
+            
+            # Option 2: Fall back to search filters if enabled
+            if cache_config.use_search_filters_for_cache_scope:
+                return self._extract_collection_ids_from_filters(search_settings.filters)
+            
+            # Option 3: No cache scoping configured
+            return []
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error extracting cache scope collection IDs: {e}")
+            return []
 
     async def rag(
         self,

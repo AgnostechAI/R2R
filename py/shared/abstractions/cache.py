@@ -1,7 +1,7 @@
 """Abstractions for semantic cache functionality."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import UUID
 
 from pydantic import Field
@@ -42,6 +42,17 @@ class CacheSettings(R2RSerializable):
         default=False,
         description="Bypass cache lookup for this request"
     )
+    
+    # NEW: Cache-specific collection targeting (separate from search filters)
+    cache_scope_collection_ids: Optional[list[Union[str, UUID]]] = Field(
+        default=None,
+        description="Specific collection IDs to use for cache scoping. If None, will extract from search filters for backward compatibility."
+    )
+    
+    use_search_filters_for_cache_scope: bool = Field(
+        default=True,
+        description="Whether to extract collection IDs from search filters for cache scoping. Set to False to use only cache_scope_collection_ids."
+    )
 
     class Config:
         json_schema_extra = {
@@ -50,7 +61,9 @@ class CacheSettings(R2RSerializable):
                 "similarity_threshold": 0.85,
                 "ttl_seconds": 0,  # 0 = never expires, 86400 = 24 hours
                 "max_cache_size": 1000,
-                "bypass_cache": False
+                "bypass_cache": False,
+                "cache_scope_collection_ids": ["3e157b3a-8469-51db-90d9-52e7d896b49b"],
+                "use_search_filters_for_cache_scope": False
             }
         }
 

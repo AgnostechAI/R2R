@@ -209,6 +209,9 @@ def rag_arg_parser(
     cache_similarity_threshold: Optional[float] = 0.85,
     cache_ttl_seconds: Optional[int] = 0,
     bypass_cache: Optional[bool] = False,
+    # Cache scoping configuration (separate from search filters)
+    cache_scope_collection_ids: Optional[list[str]] = None,
+    use_search_filters_for_cache_scope: Optional[bool] = True,
 ) -> dict:
     if rag_generation_config and not isinstance(rag_generation_config, dict):
         rag_generation_config = rag_generation_config.model_dump()
@@ -227,6 +230,9 @@ def rag_arg_parser(
         "cache_similarity_threshold": cache_similarity_threshold,
         "cache_ttl_seconds": cache_ttl_seconds,
         "bypass_cache": bypass_cache,
+        # Cache scoping configuration
+        "cache_scope_collection_ids": cache_scope_collection_ids,
+        "use_search_filters_for_cache_scope": use_search_filters_for_cache_scope,
     }
     if search_mode:
         data["search_mode"] = search_mode
@@ -386,6 +392,9 @@ class RetrievalSDK:
         cache_similarity_threshold: Optional[float] = 0.85,
         cache_ttl_seconds: Optional[int] = 0,
         bypass_cache: Optional[bool] = False,
+        # Cache scoping configuration (separate from search filters)
+        cache_scope_collection_ids: Optional[list[str]] = None,
+        use_search_filters_for_cache_scope: Optional[bool] = True,
     ) -> (
         WrappedRAGResponse
         | Generator[
@@ -427,6 +436,8 @@ class RetrievalSDK:
             cache_similarity_threshold=cache_similarity_threshold,
             cache_ttl_seconds=cache_ttl_seconds,
             bypass_cache=bypass_cache,
+            cache_scope_collection_ids=cache_scope_collection_ids,
+            use_search_filters_for_cache_scope=use_search_filters_for_cache_scope,
         )
         rag_generation_config = data.get("rag_generation_config")
         if rag_generation_config and rag_generation_config.get(  # type: ignore

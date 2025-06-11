@@ -253,6 +253,15 @@ class RetrievalRouter(BaseRouterV3):
                 default=False,
                 description="Skip cache lookup and force fresh RAG generation. Useful for testing or when fresh results are required.",
             ),
+            # Cache scoping configuration (separate from search filters)
+            cache_scope_collection_ids: Optional[list[str]] = Body(
+                default=None,
+                description="Specific collection IDs to use for cache scoping. If provided, cache will be scoped to these collections regardless of search filters. This prevents cache pollution when using different search filters on the same collections.",
+            ),
+            use_search_filters_for_cache_scope: bool = Body(
+                default=True,
+                description="Whether to extract collection IDs from search filters for cache scoping. Set to False to use only cache_scope_collection_ids. This allows independent control of search filtering vs cache scoping.",
+            ),
             auth_user=Depends(self.providers.auth.auth_wrapper()),
         ) -> WrappedRAGResponse:
             """Execute a RAG (Retrieval-Augmented Generation) query.
@@ -307,7 +316,26 @@ class RetrievalRouter(BaseRouterV3):
                 "cache_enabled": true,              // Enable/disable caching
                 "cache_similarity_threshold": 0.85, // Similarity required for cache hit
                 "cache_ttl_seconds": 0,             // 0 = indefinite, >0 = expiration
-                "bypass_cache": false               // Skip cache lookup
+                "bypass_cache": false,              // Skip cache lookup
+                "cache_scope_collection_ids": ["collection-id"],  // Explicit cache scoping
+                "use_search_filters_for_cache_scope": false       // Independent cache scoping
+            }
+            ```
+
+            **Cache Scoping (Prevents Cache Pollution):**
+            
+            By default, cache entries are scoped to collections found in search filters. However, this can cause cache pollution when using different search filters on the same collections.
+            
+            Example problem:
+            - Query 1: Search PDFs only in collection A → Cache entry for collection A
+            - Query 2: Search Word docs only in collection A → Gets cached PDF results!
+            
+            Solution: Use independent cache scoping:
+            ```json
+            {
+                "search_settings": {"filters": {"document_type": {"$eq": "pdf"}}},
+                "cache_scope_collection_ids": ["collection-a"],
+                "use_search_filters_for_cache_scope": false
             }
             ```
 
@@ -339,12 +367,14 @@ class RetrievalRouter(BaseRouterV3):
                 auth_user, search_mode, search_settings
             )
 
-            # Prepare cache settings
+            # Prepare cache settings with separate scoping control
             cache_settings = {
                 "enabled": cache_enabled,
                 "similarity_threshold": cache_similarity_threshold,
                 "ttl_seconds": cache_ttl_seconds,
                 "bypass_cache": bypass_cache,
+                "cache_scope_collection_ids": cache_scope_collection_ids,
+                "use_search_filters_for_cache_scope": use_search_filters_for_cache_scope,
             }
 
             response = await self.services.retrieval.rag(
