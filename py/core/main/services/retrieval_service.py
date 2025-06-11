@@ -1020,13 +1020,24 @@ class RetrievalService(Service):
             settings = cache_settings or {}
             ttl_seconds = settings.get("ttl_seconds", 0)  # 0 = indefinite storage by default
             
+            # Helper function to serialize UUIDs in JSON
+            def serialize_for_json(obj):
+                if isinstance(obj, UUID):
+                    return str(obj)
+                elif isinstance(obj, dict):
+                    return {k: serialize_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [serialize_for_json(item) for item in obj]
+                else:
+                    return obj
+
             # Create cache metadata
             cache_metadata = {
                 "type": "semantic_cache_entry",
                 "original_query": query,
                 "generated_answer": response.get("generated_answer", ""),
-                "search_results": json.dumps(response.get("search_results", {})),
-                "citations": json.dumps(response.get("citations", [])),
+                "search_results": json.dumps(serialize_for_json(response.get("search_results", {}))),
+                "citations": json.dumps(serialize_for_json(response.get("citations", []))),
                 "cached_at": datetime.now().isoformat(),
                 "cache_ttl": ttl_seconds,
                 "collection_id": str(collection_id),
