@@ -1206,12 +1206,12 @@ class RetrievalService(Service):
             metadata["hit_count"] = metadata.get("hit_count", 0) + 1
             metadata["last_accessed"] = datetime.now().isoformat()
             
-            # Create updated vector entry
+            # Create updated vector entry (handle UUID conversion)
             updated_entry = VectorEntry(
                 id=cache_entry_id,
-                document_id=UUID(cache_entry["document_id"]),
-                owner_id=UUID(cache_entry["owner_id"]),
-                collection_ids=cache_entry["collection_ids"],
+                document_id=UUID(str(cache_entry["document_id"])),
+                owner_id=UUID(str(cache_entry["owner_id"])),
+                collection_ids=[UUID(str(cid)) if not isinstance(cid, UUID) else cid for cid in cache_entry["collection_ids"]],
                 vector=Vector(
                     data=json.loads(cache_entry["vec"]) if isinstance(cache_entry["vec"], str) else cache_entry["vec"],
                     type=VectorType.FIXED
