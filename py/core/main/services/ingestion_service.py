@@ -1112,8 +1112,7 @@ class IngestionService:
                 offset=0,
                 limit=10000,  # Large limit to get all entries
                 filters={
-                    "collection_ids": {"$overlap": [str(cache_collection_id)]},
-                    "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                    "collection_ids": {"$overlap": [str(cache_collection_id)]}
                 }
             )
             
@@ -1331,8 +1330,7 @@ class IngestionService:
                     offset=0,
                     limit=10000,
                     filters={
-                        "collection_ids": {"$overlap": [str(cache_coll_id)]},
-                        "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                        "collection_ids": {"$overlap": [str(cache_coll_id)]}
                     }
                 )
                 
@@ -1430,15 +1428,17 @@ class IngestionService:
                 raise ValueError(f"No cache collection found for {collection_id}")
             
             # Fetch entries from cache collection with pagination
+            # Note: We only filter by collection_id, similar to how semantic_search works
+            # The metadata filter was causing issues with retrieving cache entries
             filters = {
-                "collection_ids": {"$overlap": [str(cache_collection_id)]},
-                "metadata": {"$contains": {"type": "semantic_cache_entry"}}
+                "collection_ids": {"$overlap": [str(cache_collection_id)]}
             }
             
             results = await self.providers.database.chunks_handler.list_chunks(
                 filters=filters,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                include_vectors=True  # Include vectors to ensure we get all data
             )
             
             entries = []
