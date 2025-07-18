@@ -255,13 +255,21 @@ class CacheEntryDetail(R2RSerializable):
 
 class CacheEntriesResponse(R2RSerializable):
     """Response for listing cache entries"""
-    entries: Union[list[str], list[CacheEntryDetail]] = Field(..., description="Cache entries in requested format")
+    entries: Union[list[dict], list[CacheEntryDetail]] = Field(..., description="Cache entries in requested format")
     total_count: int = Field(..., description="Total number of entries")
     format: str = Field(..., description="Format of entries (plain or detailed)")
 
 class CacheTTLUpdate(R2RSerializable):
     """Model for updating cache entry TTLs"""
     ttl_updates: dict[str, Optional[int]] = Field(..., description="Map of entry_id to new TTL")
+
+class CacheEntryCreateRequest(R2RSerializable):
+    """Request model for creating a new cache entry"""
+    query: str = Field(..., description="The query text to cache")
+    answer: str = Field(..., description="The answer to cache")
+    search_results: Optional[dict] = Field(None, description="Optional search results")
+    citations: Optional[list] = Field(None, description="Optional citations")
+    ttl_seconds: int = Field(0, description="TTL in seconds (0 = never expire)")
 
 class CacheEntryUpdateRequest(R2RSerializable):
     """Request model for updating a cache entry"""

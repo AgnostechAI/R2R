@@ -193,3 +193,44 @@ class CacheSDK:
         )
         
         return response_dict["results"]
+
+    def add_cache_entry(
+        self,
+        collection_id: Union[str, UUID],
+        query: str,
+        answer: str,
+        search_results: Optional[dict] = None,
+        citations: Optional[list] = None,
+        ttl_seconds: int = 0
+    ) -> dict:
+        """Add a new cache entry directly.
+
+        Args:
+            collection_id: The collection ID
+            query: The query text to cache
+            answer: The answer to cache
+            search_results: Optional search results
+            citations: Optional citations
+            ttl_seconds: TTL in seconds (0 = never expire)
+
+        Returns:
+            dict: Response with entry_id and success message
+        """
+        from shared.abstractions.cache import CacheEntryCreateRequest
+        
+        request = CacheEntryCreateRequest(
+            query=query,
+            answer=answer,
+            search_results=search_results,
+            citations=citations,
+            ttl_seconds=ttl_seconds
+        )
+        
+        response_dict = self.client._make_request(
+            "POST",
+            f"system/cache/entries/{collection_id}",
+            json=request.model_dump(),
+            version="v3"
+        )
+        
+        return response_dict["results"]

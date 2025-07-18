@@ -1460,19 +1460,20 @@ class IngestionService:
                     continue
                 
                 if format == "plain":
-                    # Format as plain text
-                    last_accessed = metadata.get("last_accessed", "Never")
-                    ttl_display = "Never expires" if ttl_seconds == 0 else f"{ttl_seconds} seconds"
-                    
-                    entry_text = f"""Query: {metadata['original_query']}
-Answer: {metadata['generated_answer']}
-TTL: {ttl_display}
-Hit Count: {metadata.get('hit_count', 0)}
-Last Accessed: {last_accessed}
-Cached At: {metadata['cached_at']}
-Entry ID: {chunk['id']}
----"""
-                    entries.append(entry_text)
+                    # Return structured data even in plain format
+                    entry_dict = {
+                        "entry_id": chunk['id'],
+                        "query": metadata['original_query'],
+                        "answer": metadata['generated_answer'],
+                        "ttl_seconds": ttl_seconds,
+                        "hit_count": metadata.get('hit_count', 0),
+                        "last_accessed": metadata.get("last_accessed", None),
+                        "cached_at": metadata['cached_at'],
+                        "is_expired": is_expired
+                    }
+                    if expires_at:
+                        entry_dict["expires_at"] = expires_at.isoformat()
+                    entries.append(entry_dict)
                 else:
                     # Format as detailed object
                     # Parse JSON data with error handling
@@ -1845,6 +1846,63 @@ Entry ID: {chunk['id']}
             
         except Exception as e:
             logger.error(f"Error updating cache TTLs: {e}")
+            raise
+
+    async def add_cache_entry(
+        self,
+        collection_id: UUID,
+        query: str,
+        answer: str,
+        owner_id: UUID,
+        search_results: Optional[dict] = None,
+        citations: Optional[list] = None,
+        ttl_seconds: int = 0
+    ) -> str:
+        """
+        Add a new cache entry directly (without going through RAG).
+        
+        Args:
+            collection_id: The collection ID (regular, not cache)
+            query: The query text to cache
+            answer: The answer to cache
+            owner_id: The owner ID for the cache entry
+            search_results: Optional search results to include
+            citations: Optional citations to include
+            ttl_seconds: TTL for the cache entry (0 = never expire)
+            
+        Returns:
+            str: The ID of the created cache entry
+        """
+        try:
+            # Create a response dict in the format expected by store_cache_entry
+            response = {
+                "generated_answer": answer,
+                "search_results": search_results or {},
+                "citations": citations or [],
+                "metadata": {
+                    "model": "manual_entry"
+                }
+            }
+            
+            # Use the existing store_cache_entry method
+            result = await self.store_cache_entry(
+                query=query,
+                response=response,
+                collection_id=collection_id,
+                owner_id=owner_id,
+                cache_settings={"ttl_seconds": ttl_seconds}
+            )
+            
+            # Extract the entry ID from the result message
+            # Result format: "Successfully cached entry {cache_entry_id}"
+            if result.startswith("Successfully cached entry"):
+                entry_id = result.split()[-1]
+                return entry_id
+            else:
+                raise ValueError(f"Failed to create cache entry: {result}")
+                
+        except Exception as e:
+            logger.error(f"Error adding cache entry: {e}")
             raise
 
 

@@ -15,6 +15,7 @@ from core.base.api.models import (
     WrappedSettingsResponse,
 )
 from shared.abstractions.cache import (
+    CacheEntryCreateRequest,
     CacheEntryUpdateRequest,
     CacheEntryBulkUpdate,
     CacheDeleteRequest,
@@ -494,3 +495,40 @@ class SystemRouter(BaseRouterV3):
             )
             
             return result
+        
+        @self.router.post(
+            "/system/cache/entries/{collection_id}",
+            dependencies=[Depends(self.rate_limit_dependency)],
+            summary="Add Cache Entry",
+        )
+        @self.base_endpoint
+        async def add_cache_entry(
+            collection_id: UUID = Path(..., description="The collection ID (regular or cache collection)"),
+            request: CacheEntryCreateRequest = Body(...),
+            auth_user=Depends(self.providers.auth.auth_wrapper()),
+        ):
+            """
+            Add a new cache entry directly.
+            
+            This allows pre-populating the cache with known query-answer pairs
+            without going through the RAG pipeline.
+            
+            Only superusers can add cache entries.
+            """
+            if not auth_user.is_superuser:
+                raise R2RException(
+                    "Only a superuser can add cache entries.",
+                    403,
+                )
+            
+            entry_id = await self.services.ingestion.add_cache_entry(
+                collection_id=collection_id,
+                query=request.query,
+                answer=request.answer,
+                owner_id=auth_user.id,
+                search_results=request.search_results,
+                citations=request.citations,
+                ttl_seconds=request.ttl_seconds
+            )
+            
+            return {"entry_id": entry_id, "message": "Cache entry added successfully"}
