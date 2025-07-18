@@ -914,11 +914,18 @@ class IngestionService:
     async def _get_cache_collection_id(self, collection_id: UUID) -> UUID:
         """Get the cache collection ID for a given collection.
         
-        Looks up the cache collection (collection with "_cache" suffix) 
-        associated with the given collection ID.
+        This method handles both regular collection IDs and cache collection IDs:
+        - If given a regular collection ID, finds the associated cache collection
+        - If given a cache collection ID (name ends with "_cache"), returns it directly
+        
+        Args:
+            collection_id: Either a regular collection ID or a cache collection ID
+            
+        Returns:
+            UUID: The cache collection ID
         """
         try:
-            # Get collection info to find the cache collection
+            # Get collection info
             collections_overview = await self.providers.database.collections_handler.get_collections_overview(
                 offset=0,
                 limit=100,
@@ -930,6 +937,11 @@ class IngestionService:
                 
             collection = collections_overview["results"][0]
             collection_name = collection.name
+            
+            # Check if this is already a cache collection
+            if collection_name.endswith("_cache"):
+                logger.info(f"Collection {collection_id} is already a cache collection")
+                return collection_id
             
             # Look for the cache collection (name + "_cache")
             cache_name = f"{collection_name}_cache"
@@ -950,6 +962,28 @@ class IngestionService:
         except Exception as e:
             logger.error(f"Error getting cache collection ID: {e}")
             raise
+
+    async def _is_cache_collection(self, collection_id: UUID) -> bool:
+        """Check if a collection is a cache collection.
+        
+        Args:
+            collection_id: The collection ID to check
+            
+        Returns:
+            bool: True if it's a cache collection, False otherwise
+        """
+        try:
+            collections_overview = await self.providers.database.collections_handler.get_collections_overview(
+                offset=0,
+                limit=1,
+                filter_collection_ids=[collection_id]
+            )
+            
+            if collections_overview["results"]:
+                return collections_overview["results"][0].name.endswith("_cache")
+            return False
+        except Exception:
+            return False
 
     async def search_cache_entries(
         self,
@@ -1397,8 +1431,8 @@ class IngestionService:
             
             # Fetch entries from cache collection with pagination
             filters = {
-                "collection_ids": [str(cache_collection_id)],
-                "metadata.type": "semantic_cache_entry"
+                "collection_ids": {"$overlap": [str(cache_collection_id)]},
+                "metadata": {"$contains": {"type": "semantic_cache_entry"}}
             }
             
             results = await self.providers.database.chunks_handler.list_chunks(
@@ -1408,7 +1442,7 @@ class IngestionService:
             )
             
             entries = []
-            for chunk in results["chunks"]:
+            for chunk in results["results"]:
                 metadata = chunk["metadata"]
                 
                 # Check if expired

@@ -307,7 +307,7 @@ class SystemRouter(BaseRouterV3):
         )
         @self.base_endpoint
         async def get_cache_entries(
-            collection_id: UUID = Path(..., description="The collection ID"),
+            collection_id: UUID = Path(..., description="The collection ID (regular or cache collection)"),
             format: str = Query("plain", description="Output format: 'plain' or 'detailed'"),
             include_expired: bool = Query(False, description="Include expired entries"),
             offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -316,6 +316,10 @@ class SystemRouter(BaseRouterV3):
         ):
             """
             Get cache entries for a collection in plain text or detailed format.
+            
+            You can provide either:
+            - A regular collection ID (recommended)
+            - A cache collection ID (ending with "_cache")
             
             Only superusers can access cache entries.
             """
@@ -342,12 +346,16 @@ class SystemRouter(BaseRouterV3):
         )
         @self.base_endpoint
         async def get_cache_entry_details(
-            collection_id: UUID = Path(..., description="The collection ID"),
+            collection_id: UUID = Path(..., description="The collection ID (regular or cache collection)"),
             entry_id: str = Path(..., description="The cache entry ID"),
             auth_user=Depends(self.providers.auth.auth_wrapper()),
         ):
             """
             Get detailed information for a specific cache entry.
+            
+            You can provide either:
+            - A regular collection ID (recommended)
+            - A cache collection ID (ending with "_cache")
             
             Only superusers can access cache entry details.
             """
