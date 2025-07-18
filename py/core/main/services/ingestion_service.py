@@ -1552,8 +1552,9 @@ class IngestionService:
             metadata = chunk["metadata"]
             
             # Verify it belongs to the correct cache collection
-            if str(cache_collection_id) not in chunk["collection_ids"]:
-                raise ValueError(f"Cache entry {entry_id} does not belong to collection {collection_id}")
+            collection_ids_str = [str(cid) for cid in chunk["collection_ids"]]
+            if str(cache_collection_id) not in collection_ids_str:
+                raise ValueError(f"Cache entry {entry_id} does not belong to cache collection {cache_collection_id}")
             
             # Calculate expiration
             cached_at = datetime.fromisoformat(metadata["cached_at"])
@@ -1639,8 +1640,10 @@ class IngestionService:
                 raise ValueError(f"Cache entry {entry_id} not found")
                 
             # Verify it belongs to the correct cache collection
-            if str(cache_collection_id) not in existing["collection_ids"]:
-                raise ValueError(f"Cache entry {entry_id} does not belong to collection {collection_id}")
+            # Convert collection_ids to strings for comparison
+            collection_ids_str = [str(cid) for cid in existing["collection_ids"]]
+            if str(cache_collection_id) not in collection_ids_str:
+                raise ValueError(f"Cache entry {entry_id} does not belong to cache collection {cache_collection_id}")
             
             # Update metadata
             metadata = existing["metadata"].copy()
@@ -1778,17 +1781,25 @@ class IngestionService:
                         entry_uuid
                     )
                     
-                    if chunk and str(cache_collection_id) in chunk["collection_ids"]:
-                        # Use delete method with correct filter syntax
-                        await self.providers.database.chunks_handler.delete(
-                            filters={"id": {"$eq": entry_uuid}}
-                        )
-                        results["deleted"] += 1
+                    if chunk:
+                        collection_ids_str = [str(cid) for cid in chunk["collection_ids"]]
+                        if str(cache_collection_id) in collection_ids_str:
+                            # Use delete method with correct filter syntax
+                            await self.providers.database.chunks_handler.delete(
+                                filters={"id": {"$eq": entry_uuid}}
+                            )
+                            results["deleted"] += 1
+                        else:
+                            results["failed"] += 1
+                            results["errors"].append({
+                                "entry_id": entry_id,
+                                "error": "Entry does not belong to cache collection"
+                            })
                     else:
                         results["failed"] += 1
                         results["errors"].append({
                             "entry_id": entry_id,
-                            "error": "Entry not found or does not belong to collection"
+                            "error": "Entry not found"
                         })
                 except Exception as e:
                     results["failed"] += 1
