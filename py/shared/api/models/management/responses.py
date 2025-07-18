@@ -7,6 +7,15 @@ from pydantic import BaseModel
 from shared.abstractions.document import DocumentResponse
 from shared.abstractions.llm import Message
 from shared.abstractions.user import Token, User
+from shared.abstractions.cache import (
+    CacheEntry,
+    CacheEntryDetail,
+    CacheEntriesResponse,
+    CacheEntryUpdateRequest,
+    CacheEntryBulkUpdate,
+    CacheTTLUpdate,
+    CacheMetrics,
+)
 from shared.api.models.base import PaginatedR2RResult, R2RResults
 
 
@@ -173,3 +182,9 @@ WrappedAPIKeyResponse = R2RResults[ApiKey]
 WrappedAPIKeysResponse = PaginatedR2RResult[list[ApiKeyNoPriv]]
 WrappedLoginResponse = R2RResults[LoginResponse]
 WrappedLimitsResponse = R2RResults[LimitsResponse]
+
+# Cache Responses
+WrappedCacheEntryResponse = R2RResults[CacheEntry]
+WrappedCacheEntryDetailResponse = R2RResults[CacheEntryDetail]
+WrappedCacheEntriesResponse = R2RResults[CacheEntriesResponse]
+WrappedCacheMetricsResponse = R2RResults[CacheMetrics]

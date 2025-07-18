@@ -33,6 +33,11 @@ from core.base.abstractions import (
 )
 from core.base.api.models import User
 from shared.abstractions import PDFParsingError, PopplerNotFoundError
+from shared.abstractions.cache import (
+    CacheEntryDetail,
+    CacheEntriesResponse,
+    CacheEntryUpdate,
+)
 
 from ..abstractions import R2RProviders
 from ..config import R2RConfig
@@ -1353,6 +1358,460 @@ class IngestionService:
         **kwargs: Any,
     ) -> dict:
         return await self.providers.database.chunks_handler.get_chunk(chunk_id)
+
+    # Phase 2: Cache Entry Management Methods
+
+    async def get_cache_entries(
+        self,
+        collection_id: UUID,
+        include_expired: bool = False,
+        format: str = "plain",  # "plain" or "detailed"
+        offset: int = 0,
+        limit: int = 100
+    ) -> CacheEntriesResponse:
+        """
+        Get all cache entries for a collection in plain text or detailed format.
+        
+        Args:
+            collection_id: The collection ID
+            include_expired: Whether to include expired entries
+            format: Output format - "plain" for text, "detailed" for full objects
+            offset: Pagination offset
+            limit: Number of entries to return (max 1000)
+            
+        Returns:
+            CacheEntriesResponse with entries in requested format
+        """
+        try:
+            # Validate input parameters
+            if format not in ["plain", "detailed"]:
+                raise ValueError("Format must be 'plain' or 'detailed'")
+            
+            if limit > 1000:
+                limit = 1000  # Cap at reasonable maximum
+            
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            if not cache_collection_id:
+                raise ValueError(f"No cache collection found for {collection_id}")
+            
+            # Fetch entries from cache collection with pagination
+            filters = {
+                "collection_ids": [str(cache_collection_id)],
+                "metadata.type": "semantic_cache_entry"
+            }
+            
+            results = await self.providers.database.chunks_handler.list_chunks(
+                filters=filters,
+                offset=offset,
+                limit=limit
+            )
+            
+            entries = []
+            for chunk in results["chunks"]:
+                metadata = chunk["metadata"]
+                
+                # Check if expired
+                cached_at = datetime.fromisoformat(metadata["cached_at"])
+                ttl_seconds = metadata.get("cache_ttl", 0)
+                is_expired = False
+                expires_at = None
+                
+                if ttl_seconds > 0:
+                    expires_at = cached_at + timedelta(seconds=ttl_seconds)
+                    is_expired = datetime.now() > expires_at
+                
+                # Skip expired entries if not requested
+                if is_expired and not include_expired:
+                    continue
+                
+                if format == "plain":
+                    # Format as plain text
+                    last_accessed = metadata.get("last_accessed", "Never")
+                    ttl_display = "Never expires" if ttl_seconds == 0 else f"{ttl_seconds} seconds"
+                    
+                    entry_text = f"""Query: {metadata['original_query']}
+Answer: {metadata['generated_answer']}
+TTL: {ttl_display}
+Hit Count: {metadata.get('hit_count', 0)}
+Last Accessed: {last_accessed}
+Cached At: {metadata['cached_at']}
+Entry ID: {chunk['id']}
+---"""
+                    entries.append(entry_text)
+                else:
+                    # Format as detailed object
+                    # Parse JSON data with error handling
+                    try:
+                        search_results = json.loads(metadata.get("search_results", "{}"))
+                    except json.JSONDecodeError:
+                        search_results = {}
+                        logger.warning(f"Failed to parse search_results for cache entry {chunk['id']}")
+                    
+                    try:
+                        citations = json.loads(metadata.get("citations", "[]"))
+                    except json.JSONDecodeError:
+                        citations = []
+                        logger.warning(f"Failed to parse citations for cache entry {chunk['id']}")
+                    
+                    entry = CacheEntryDetail(
+                        entry_id=chunk["id"],
+                        query=metadata["original_query"],
+                        answer=metadata["generated_answer"],
+                        search_results=search_results,
+                        citations=citations,
+                        collection_id=str(collection_id),
+                        cached_at=cached_at,
+                        ttl_seconds=ttl_seconds,
+                        hit_count=metadata.get("hit_count", 0),
+                        last_accessed=metadata.get("last_accessed"),
+                        is_expired=is_expired,
+                        expires_at=expires_at
+                    )
+                    entries.append(entry)
+            
+            return CacheEntriesResponse(
+                entries=entries,
+                total_count=results.get("total_entries", len(entries)),
+                format=format
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting cache entries: {e}")
+            raise
+
+    async def get_cache_entry_details(
+        self,
+        collection_id: UUID,
+        entry_id: str
+    ) -> CacheEntryDetail:
+        """
+        Get detailed information for a specific cache entry.
+        
+        Args:
+            collection_id: The collection ID
+            entry_id: The cache entry ID
+            
+        Returns:
+            CacheEntryDetail with full information
+        """
+        try:
+            # Validate entry_id is valid UUID format
+            try:
+                entry_uuid = UUID(entry_id)
+            except ValueError:
+                raise ValueError(f"Invalid entry ID format: {entry_id}")
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            if not cache_collection_id:
+                raise ValueError(f"No cache collection found for {collection_id}")
+            
+            # Fetch the specific entry
+            chunk = await self.providers.database.chunks_handler.get_chunk(
+                chunk_id=entry_uuid
+            )
+            
+            if not chunk:
+                raise ValueError(f"Cache entry {entry_id} not found")
+                
+            metadata = chunk["metadata"]
+            
+            # Verify it belongs to the correct cache collection
+            if str(cache_collection_id) not in chunk["collection_ids"]:
+                raise ValueError(f"Cache entry {entry_id} does not belong to collection {collection_id}")
+            
+            # Calculate expiration
+            cached_at = datetime.fromisoformat(metadata["cached_at"])
+            ttl_seconds = metadata.get("cache_ttl", 0)
+            is_expired = False
+            expires_at = None
+            
+            if ttl_seconds > 0:
+                expires_at = cached_at + timedelta(seconds=ttl_seconds)
+                is_expired = datetime.now() > expires_at
+            
+            # Parse JSON data with error handling
+            try:
+                search_results = json.loads(metadata.get("search_results", "{}"))
+            except json.JSONDecodeError:
+                search_results = {}
+                logger.warning(f"Failed to parse search_results for cache entry {entry_id}")
+            
+            try:
+                citations = json.loads(metadata.get("citations", "[]"))
+            except json.JSONDecodeError:
+                citations = []
+                logger.warning(f"Failed to parse citations for cache entry {entry_id}")
+            
+            return CacheEntryDetail(
+                entry_id=entry_id,
+                query=metadata["original_query"],
+                answer=metadata["generated_answer"],
+                search_results=search_results,
+                citations=citations,
+                collection_id=str(collection_id),
+                cached_at=cached_at,
+                ttl_seconds=ttl_seconds,
+                hit_count=metadata.get("hit_count", 0),
+                last_accessed=metadata.get("last_accessed"),
+                is_expired=is_expired,
+                expires_at=expires_at
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting cache entry details: {e}")
+            raise
+
+    async def update_cache_entry(
+        self,
+        collection_id: UUID,
+        entry_id: str,
+        answer: Optional[str] = None,
+        search_results: Optional[dict] = None,
+        citations: Optional[list] = None,
+        ttl_seconds: Optional[int] = None
+    ) -> bool:
+        """
+        Update content of a cache entry. Note: Query remains immutable.
+        
+        Args:
+            collection_id: The collection ID
+            entry_id: The cache entry ID
+            answer: New answer content
+            search_results: Updated search results
+            citations: Updated citations
+            ttl_seconds: New TTL (None=no change, 0=never expire, >0=TTL)
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # Validate entry_id is valid UUID format
+            try:
+                entry_uuid = UUID(entry_id)
+            except ValueError:
+                raise ValueError(f"Invalid entry ID format: {entry_id}")
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            if not cache_collection_id:
+                raise ValueError(f"No cache collection found for {collection_id}")
+            
+            # Fetch existing entry with vectors for potential updates
+            existing = await self.providers.database.chunks_handler.get_chunk(
+                chunk_id=entry_uuid,
+                include_vectors=True
+            )
+            if not existing:
+                raise ValueError(f"Cache entry {entry_id} not found")
+                
+            # Verify it belongs to the correct cache collection
+            if str(cache_collection_id) not in existing["collection_ids"]:
+                raise ValueError(f"Cache entry {entry_id} does not belong to collection {collection_id}")
+            
+            # Update metadata
+            metadata = existing["metadata"].copy()
+            
+            # Update only provided fields
+            if answer is not None:
+                metadata["generated_answer"] = answer
+            if search_results is not None:
+                try:
+                    metadata["search_results"] = json.dumps(search_results)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"Invalid search_results format: {e}")
+            if citations is not None:
+                try:
+                    metadata["citations"] = json.dumps(citations)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"Invalid citations format: {e}")
+            if ttl_seconds is not None:
+                metadata["cache_ttl"] = ttl_seconds
+                
+            # Update timestamp but preserve hit count
+            metadata["updated_at"] = datetime.now().isoformat()
+            
+            # Update the entry (keep query and embedding unchanged)
+            # Note: We need to update through the vector entry mechanism
+            # since chunks_handler doesn't have update_entry method
+            vector_data = existing.get("vector")
+            if not vector_data:
+                # If no vector data, we need to handle this case
+                raise ValueError(f"No vector data found for cache entry {entry_id}")
+            
+            updated_entry = VectorEntry(
+                id=entry_uuid,
+                document_id=UUID(existing.get("document_id")),
+                owner_id=UUID(existing.get("owner_id")) if existing.get("owner_id") else None,
+                collection_ids=[UUID(cid) if isinstance(cid, str) else cid for cid in existing.get("collection_ids", [])],
+                vector=Vector(
+                    data=vector_data,
+                    type=VectorType.FIXED,
+                    length=len(vector_data)
+                ),
+                text=existing.get("text"),
+                metadata=metadata
+            )
+            await self.providers.database.chunks_handler.upsert_entries([updated_entry])
+            
+            logger.info(f"Updated cache entry {entry_id} for collection {collection_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating cache entry: {e}")
+            raise
+
+    async def bulk_update_cache_entries(
+        self,
+        collection_id: UUID,
+        updates: list[CacheEntryUpdate]
+    ) -> dict:
+        """
+        Update multiple cache entries at once.
+        
+        Args:
+            collection_id: The collection ID
+            updates: List of updates to apply
+            
+        Returns:
+            dict: Summary of results {"succeeded": count, "failed": count, "errors": [...]}
+        """
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            if not cache_collection_id:
+                raise ValueError(f"No cache collection found for {collection_id}")
+            
+            results = {"succeeded": 0, "failed": 0, "errors": []}
+            
+            for update in updates:
+                try:
+                    await self.update_cache_entry(
+                        collection_id=collection_id,
+                        entry_id=update.entry_id,
+                        answer=update.generated_answer,
+                        search_results=update.search_results,
+                        citations=update.citations,
+                        ttl_seconds=update.ttl_seconds
+                    )
+                    results["succeeded"] += 1
+                except Exception as e:
+                    results["failed"] += 1
+                    results["errors"].append({
+                        "entry_id": update.entry_id,
+                        "error": str(e)
+                    })
+                    logger.error(f"Failed to update cache entry {update.entry_id}: {e}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in bulk update: {e}")
+            raise
+
+    async def delete_cache_entries(
+        self,
+        collection_id: UUID,
+        entry_ids: list[str]
+    ) -> dict:
+        """
+        Delete specific cache entries.
+        
+        Args:
+            collection_id: The collection ID
+            entry_ids: List of entry IDs to delete
+            
+        Returns:
+            dict: Summary {"deleted": count, "failed": count, "errors": [...]}
+        """
+        try:
+            # Get cache collection ID
+            cache_collection_id = await self._get_cache_collection_id(collection_id)
+            if not cache_collection_id:
+                raise ValueError(f"No cache collection found for {collection_id}")
+            
+            results = {"deleted": 0, "failed": 0, "errors": []}
+            
+            for entry_id in entry_ids:
+                try:
+                    # Validate entry_id is valid UUID format
+                    try:
+                        entry_uuid = UUID(entry_id)
+                    except ValueError:
+                        raise ValueError(f"Invalid entry ID format: {entry_id}")
+                    
+                    # Verify entry belongs to this collection before deleting
+                    chunk = await self.providers.database.chunks_handler.get_chunk(
+                        chunk_id=entry_uuid
+                    )
+                    
+                    if chunk and str(cache_collection_id) in chunk["collection_ids"]:
+                        # Use delete method with correct filter syntax
+                        await self.providers.database.chunks_handler.delete(
+                            filters={"id": {"$eq": entry_uuid}}
+                        )
+                        results["deleted"] += 1
+                    else:
+                        results["failed"] += 1
+                        results["errors"].append({
+                            "entry_id": entry_id,
+                            "error": "Entry not found or does not belong to collection"
+                        })
+                except Exception as e:
+                    results["failed"] += 1
+                    results["errors"].append({
+                        "entry_id": entry_id,
+                        "error": str(e)
+                    })
+                    logger.error(f"Failed to delete cache entry {entry_id}: {e}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error deleting cache entries: {e}")
+            raise
+
+    async def update_cache_ttls(
+        self,
+        collection_id: UUID,
+        ttl_updates: dict[str, Optional[int]]
+    ) -> dict:
+        """
+        Update TTLs for cache entries.
+        
+        Args:
+            collection_id: The collection ID
+            ttl_updates: Map of entry_id to new TTL (None or 0 = never expire)
+            
+        Returns:
+            dict: Summary {"updated": count, "failed": count, "errors": [...]}
+        """
+        try:
+            results = {"updated": 0, "failed": 0, "errors": []}
+            
+            for entry_id, ttl_seconds in ttl_updates.items():
+                try:
+                    # Use None or 0 to mean "never expire"
+                    ttl_value = 0 if ttl_seconds is None else ttl_seconds
+                    
+                    await self.update_cache_entry(
+                        collection_id=collection_id,
+                        entry_id=entry_id,
+                        ttl_seconds=ttl_value
+                    )
+                    results["updated"] += 1
+                except Exception as e:
+                    results["failed"] += 1
+                    results["errors"].append({
+                        "entry_id": entry_id,
+                        "error": str(e)
+                    })
+                    logger.error(f"Failed to update TTL for entry {entry_id}: {e}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error updating cache TTLs: {e}")
+            raise
 
 
 class IngestionServiceAdapter:

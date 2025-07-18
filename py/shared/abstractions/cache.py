@@ -221,4 +221,55 @@ class CacheMetrics(R2RSerializable):
                 "expired_entries": 25,
                 "average_similarity": 0.91
             }
-        } 
+        }
+
+
+# Phase 2: Cache Entry Management Models
+
+class CacheEntryUpdate(R2RSerializable):
+    """Model for updating cache entry content"""
+    entry_id: str = Field(..., description="ID of the cache entry to update")
+    generated_answer: Optional[str] = Field(None, description="New answer content")
+    search_results: Optional[dict] = Field(None, description="Updated search results")
+    citations: Optional[list] = Field(None, description="Updated citations")
+    ttl_seconds: Optional[int] = Field(None, description="New TTL (None=no change, 0=never expire, >0=TTL in seconds)")
+
+class CacheEntryBulkUpdate(R2RSerializable):
+    """Model for bulk updating cache entries"""
+    updates: list[CacheEntryUpdate] = Field(..., description="List of updates to apply")
+
+class CacheEntryDetail(R2RSerializable):
+    """Detailed view of a cache entry"""
+    entry_id: str = Field(..., description="Unique ID of the cache entry")
+    query: str = Field(..., description="Original query text")
+    answer: str = Field(..., description="Cached answer")
+    search_results: dict = Field(..., description="Associated search results")
+    citations: list = Field(..., description="Associated citations")
+    collection_id: str = Field(..., description="ID of the original collection")
+    cached_at: datetime = Field(..., description="When entry was cached")
+    ttl_seconds: int = Field(..., description="Time-to-live in seconds (0=never expires)")
+    hit_count: int = Field(..., description="Number of times accessed")
+    last_accessed: Optional[datetime] = Field(None, description="Last access time")
+    is_expired: bool = Field(..., description="Whether entry has expired")
+    expires_at: Optional[datetime] = Field(None, description="Expiration time if TTL is set")
+
+class CacheEntriesResponse(R2RSerializable):
+    """Response for listing cache entries"""
+    entries: Union[list[str], list[CacheEntryDetail]] = Field(..., description="Cache entries in requested format")
+    total_count: int = Field(..., description="Total number of entries")
+    format: str = Field(..., description="Format of entries (plain or detailed)")
+
+class CacheTTLUpdate(R2RSerializable):
+    """Model for updating cache entry TTLs"""
+    ttl_updates: dict[str, Optional[int]] = Field(..., description="Map of entry_id to new TTL")
+
+class CacheEntryUpdateRequest(R2RSerializable):
+    """Request model for updating a cache entry"""
+    generated_answer: Optional[str] = Field(None, description="New answer content")
+    search_results: Optional[dict] = Field(None, description="Updated search results")
+    citations: Optional[list] = Field(None, description="Updated citations")
+    ttl_seconds: Optional[int] = Field(None, description="New TTL")
+
+class CacheDeleteRequest(R2RSerializable):
+    """Request model for deleting cache entries"""
+    entry_ids: list[str] = Field(..., description="List of entry IDs to delete") 

@@ -40,6 +40,10 @@ from shared.api.models.management.responses import (
     SettingsResponse,
     WrappedAPIKeyResponse,
     WrappedAPIKeysResponse,
+    WrappedCacheEntriesResponse,
+    WrappedCacheEntryDetailResponse,
+    WrappedCacheEntryResponse,
+    WrappedCacheMetricsResponse,
     WrappedChunkResponse,
     WrappedChunksResponse,
     WrappedCollectionResponse,
@@ -174,6 +178,11 @@ __all__ = [
     "WrappedLoginResponse",
     "WrappedUsersResponse",
     "WrappedMessageResponse",
+    # Cache Responses
+    "WrappedCacheEntryResponse",
+    "WrappedCacheEntryDetailResponse",
+    "WrappedCacheEntriesResponse",
+    "WrappedCacheMetricsResponse",
     # Base Responses
     "PaginatedR2RResult",
     "R2RResults",

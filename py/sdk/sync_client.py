@@ -8,6 +8,7 @@ from shared.abstractions import R2RException
 
 from .base.base_client import BaseClient
 from .sync_methods import (
+    CacheSDK,
     ChunksSDK,
     CollectionsSDK,
     ConversationsSDK,
@@ -30,6 +31,7 @@ class R2RClient(BaseClient):
     ):
         super().__init__(base_url, timeout)
         self.client = custom_client or Client(timeout=timeout)
+        self.cache = CacheSDK(self)
         self.chunks = ChunksSDK(self)
         self.collections = CollectionsSDK(self)
         self.conversations = ConversationsSDK(self)

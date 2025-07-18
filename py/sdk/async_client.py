@@ -7,6 +7,7 @@ import httpx
 from shared.abstractions import R2RException
 
 from .asnyc_methods import (
+    CacheSDK,
     ChunksSDK,
     CollectionsSDK,
     ConversationsSDK,
@@ -32,6 +33,7 @@ class R2RAsyncClient(BaseClient):
     ):
         super().__init__(base_url, timeout)
         self.client = custom_client or httpx.AsyncClient(timeout=timeout)
+        self.cache = CacheSDK(self)
         self.chunks = ChunksSDK(self)
         self.collections = CollectionsSDK(self)
         self.conversations = ConversationsSDK(self)

@@ -1,3 +1,4 @@
+from .cache import CacheSDK
 from .chunks import ChunksSDK
 from .collections import CollectionsSDK
 from .conversations import ConversationsSDK
@@ -10,6 +11,7 @@ from .system import SystemSDK
 from .users import UsersSDK
 
 __all__ = [
+    "CacheSDK",
     "ChunksSDK",
     "CollectionsSDK",
     "ConversationsSDK",
