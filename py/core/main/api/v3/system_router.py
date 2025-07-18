@@ -337,7 +337,7 @@ class SystemRouter(BaseRouterV3):
                 limit=limit
             )
             
-            return {"results": result}
+            return result
 
         @self.router.get(
             "/system/cache/entries/{collection_id}/{entry_id}",
@@ -370,7 +370,7 @@ class SystemRouter(BaseRouterV3):
                 entry_id=entry_id
             )
             
-            return {"results": entry}
+            return entry
 
         @self.router.put(
             "/system/cache/entries/{collection_id}/{entry_id}",
@@ -405,7 +405,7 @@ class SystemRouter(BaseRouterV3):
                 ttl_seconds=request.ttl_seconds
             )
             
-            return {"results": {"success": success}}
+            return {"success": success}
 
         @self.router.put(
             "/system/cache/entries/{collection_id}/bulk",
@@ -434,7 +434,7 @@ class SystemRouter(BaseRouterV3):
                 updates=request.updates
             )
             
-            return {"results": result}
+            return result
 
         @self.router.delete(
             "/system/cache/entries/{collection_id}",
@@ -463,7 +463,7 @@ class SystemRouter(BaseRouterV3):
                 entry_ids=request.entry_ids
             )
             
-            return {"results": result}
+            return result
 
         @self.router.put(
             "/system/cache/entries/{collection_id}/ttl",
@@ -493,4 +493,4 @@ class SystemRouter(BaseRouterV3):
                 ttl_updates=request.ttl_updates
             )
             
-            return {"results": result}
+            return result
