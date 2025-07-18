@@ -1543,7 +1543,7 @@ class IngestionService:
             
             # Fetch the specific entry
             chunk = await self.providers.database.chunks_handler.get_chunk(
-                chunk_id=entry_uuid
+                entry_uuid
             )
             
             if not chunk:
@@ -1633,8 +1633,7 @@ class IngestionService:
             
             # Fetch existing entry with vectors for potential updates
             existing = await self.providers.database.chunks_handler.get_chunk(
-                chunk_id=entry_uuid,
-                include_vectors=True
+                entry_uuid
             )
             if not existing:
                 raise ValueError(f"Cache entry {entry_id} not found")
@@ -1776,7 +1775,7 @@ class IngestionService:
                     
                     # Verify entry belongs to this collection before deleting
                     chunk = await self.providers.database.chunks_handler.get_chunk(
-                        chunk_id=entry_uuid
+                        entry_uuid
                     )
                     
                     if chunk and str(cache_collection_id) in chunk["collection_ids"]:
