@@ -1633,11 +1633,15 @@ class IngestionService:
                 raise ValueError(f"No cache collection found for {collection_id}")
             
             # Fetch existing entry with vectors for potential updates
-            existing = await self.providers.database.chunks_handler.get_chunk(
-                entry_uuid
+            chunks_result = await self.providers.database.chunks_handler.list_chunks(
+                filters={"id": {"$eq": entry_uuid}},
+                offset=0,
+                limit=1,
+                include_vectors=True
             )
-            if not existing:
+            if not chunks_result["results"]:
                 raise ValueError(f"Cache entry {entry_id} not found")
+            existing = chunks_result["results"][0]
                 
             # Verify it belongs to the correct cache collection
             # Convert collection_ids to strings for comparison
